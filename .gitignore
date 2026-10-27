@@ -1,0 +1,15 @@
+node_modules/
+dist/
+web/dist/
+backend/dist/
+*.log
+.DS_Store
+.weblift/
+data/
+*.sqlite
+*.sqlite-journal
+.vite/
+coverage/
+
+# Agent workspace data (memory, local tooling state)
+.workbuddy/

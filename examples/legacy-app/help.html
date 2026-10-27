@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta http-equiv="X-UA-Compatible" content="IE=EmulateIE7" />
+<title>ヘルプ</title>
+<link rel="stylesheet" href="css/main.css" />
+<!--[if IE]>
+<link rel="stylesheet" href="css/ie-fixes.css" />
+<![endif]-->
+<script language="JavaScript" src="js/common.js"></script>
+</head>
+<body>
+
+<h1><center><font face="MS PGothic" color="#003366">操作ヘルプ</font></center></h1>
+
+<div class="page">
+  <center>
+    <table width="720" bgcolor="#f5f5f5" border="0" cellpadding="4">
+      <tr>
+        <td>受注入力画面では、得意先コードを入力して「得意先検索」を押してください。</td>
+      </tr>
+      <tr>
+        <td>一覧画面では行をクリックすると選択状態が切り替わります。</td>
+      </tr>
+    </table>
+  </center>
+
+  <p>
+    <img src="images/step1.gif" lowsrc="images/step1-low.gif" datasrc="#stepData" datafld="image" alt="step1" />
+  </p>
+
+  <object id="mediaPlayer" classid="clsid:22D6F312-B0F6-11D0-94AB-0080C74C7E95" width="320" height="240">
+    <param name="FileName" value="media/demo.wmv" />
+  </object>
+
+  <xml id="stepData">
+    <steps>
+      <step image="images/step1.gif" />
+    </steps>
+  </xml>
+
+  <p><a href="index.jsp">受注入力へ戻る</a></p>
+</div>
+
+<script type="text/javascript">
+  function highlight(keyword) {
+    var body = document.body;
+    if (document.all) {
+      body.innerText = body.innerText;
+    }
+    if (window.event) {
+      window.event.returnValue = false;
+    }
+  }
+</script>
+
+</body>
+</html>

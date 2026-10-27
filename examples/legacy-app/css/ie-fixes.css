@@ -1,0 +1,37 @@
+/* IE-only fixes loaded after main.css. Kept separate so it can be dropped in one go. */
+
+.grid tr:hover td {
+  background: #f7f9fc;
+}
+
+* html .grid td {
+  height: 1%;
+}
+
+.amount {
+  text-align: right;
+  font-weight: bold;
+  filter: alpha(opacity=90);
+}
+
+.detail .line {
+  border-bottom: 1px dotted #c9d0da;
+  -ms-transform: translateZ(0);
+  -ms-writing-mode: lr-tb;
+}
+
+.detail h2 {
+  -ms-filter: "progid:DXImageTransform.Microsoft.Shadow(direction=135,strength=2,color=#cccccc)";
+  color: #003366\9;
+}
+
+.toolbar input {
+  width: 96px;
+  width: 104px\9;
+  -ms-user-select: none;
+}
+
+.marquee-box {
+  behavior: url(../css/marquee.htc);
+  zoom: 1;
+}

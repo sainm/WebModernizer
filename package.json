@@ -1,0 +1,27 @@
+{
+  "name": "weblift",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebLift - IE to Chrome migration toolkit: rule-based static analysis, precise source location, and safe rule-driven transformation.",
+  "workspaces": [
+    "backend",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace backend && npm run build --workspace web",
+    "build:api": "npm run build --workspace backend",
+    "build:ui": "npm run build --workspace web",
+    "test": "npm run test --workspace backend",
+    "dev": "concurrently -n api,ui -c cyan,magenta \"npm run dev --workspace backend\" \"npm run dev --workspace web\"",
+    "dev:api": "npm run dev --workspace backend",
+    "dev:ui": "npm run dev --workspace web",
+    "start": "node backend/dist/server/index.js",
+    "scan:example": "node backend/dist/cli/scan.js --project examples/legacy-app"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}

@@ -1,0 +1,68 @@
+/* Main stylesheet. Written for IE7/IE8 with layout hacks that Chrome ignores. */
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "MS PGothic", "Hiragino Kaku Gothic ProN", sans-serif;
+  font-size: 12px;
+  color: #222;
+  behavior: url(css/csshover.htc);
+}
+
+.page {
+  width: 980px;
+  *width: 960px;
+  margin: 0 auto;
+  zoom: 1;
+}
+
+.app-header {
+  height: 48px;
+  background: #003366;
+  filter: progid:DXImageTransform.Microsoft.gradient(startColorstr='#003366', endColorstr='#005599');
+}
+
+.app-header .user {
+  float: right;
+  color: #fff;
+  opacity: 0.85;
+  -ms-filter: "progid:DXImageTransform.Microsoft.Alpha(Opacity=85)";
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  -ms-flex: 1;
+  -ms-overflow-style: scrollbar;
+}
+
+table.grid th {
+  background: #eef1f5;
+  border: 1px solid #c9d0da;
+  padding: 4px 6px;
+  text-align: left;
+}
+
+table.grid td {
+  border: 1px solid #c9d0da;
+  padding: 4px 6px;
+  height: 20px;
+  _height: 18px;
+}
+
+.toolbar {
+  margin-top: 12px;
+  text-align: right;
+  *text-align: center;
+}
+
+.marquee-box {
+  width: expression(document.body.clientWidth - 40);
+  overflow: hidden;
+}
+
+.title {
+  font-size: 16px;
+  color: #003366;
+  zoom: 1;
+}

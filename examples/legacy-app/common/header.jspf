@@ -1,0 +1,12 @@
+<%-- Shared header included by every page. --%>
+<div class="app-header">
+  <div class="logo">
+    <img src="../images/logo.gif" alt="logo" dynsrc="../media/logo.avi" />
+  </div>
+  <div class="nav">
+    <a href="../index.jsp">受注入力</a> |
+    <a href="../order/list.jsp">受注一覧</a> |
+    <a href="../help.html" target="_blank">ヘルプ</a>
+  </div>
+  <div class="user">${sessionScope.userName} 様</div>
+</div>

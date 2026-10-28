@@ -733,6 +733,100 @@ define({
   },
 });
 
+define({
+  meta: {
+    id: 'WL-JS-016',
+    name: 'window.navigate',
+    version: '1.0.0',
+    description: 'IE-only window.navigate(url). Chrome removed it; location.assign is the equivalent.',
+    language: 'javascript',
+    category: 'BROWSER_BEHAVIOR',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'CONDITIONAL',
+    basis:
+      'AST match: CallExpression calling window.navigate(...) or a bare navigate(...). Object methods named .navigate (routers) do not match.',
+    recipeId: 'RCP-NAVIGATE',
+    tags: ['navigation', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee) return;
+      const isMember = callee.type === 'MemberExpression' && propName(callee) === 'navigate';
+      const isBare = callee.type === 'Identifier' && String(callee.name ?? '').toLowerCase() === 'navigate';
+      if (!isMember && !isBare) return;
+      if (isMember) {
+        const object = (callee as JsNode).object as JsNode | undefined;
+        // router.navigate(...) is a framework call that works fine in Chrome.
+        if (!object || object.type !== 'Identifier' || String(object.name) !== 'window') return;
+      }
+      const args = (node.arguments as JsNode[]) ?? [];
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Calls IE-only window.navigate(...)',
+          risk:
+            'Chrome has no window.navigate, so the call throws and the page never moves. The trap is that object methods named .navigate (Vue Router, React Router wrappers) are perfectly valid — only the window-level call is IE.',
+          recommendation:
+            'Replace with location.assign(url) to keep history behaviour, or location.replace(url) if the current page must not stay in the back stack. Confirm which one the old code relied on.',
+          migrationLevel: args.length === 1 ? 'CONDITIONAL' : 'MANUAL',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { callee: isBare ? 'navigate' : 'window.navigate', argumentCount: args.length, touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-002',
+    name: 'element.currentStyle',
+    version: '1.0.0',
+    description: 'IE-only computed style object. Chrome exposes getComputedStyle(element) instead.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property currentStyle on any object.',
+    tags: ['computed-style', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'currentStyle') return;
+      const object = (node.object as JsNode) ?? null;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads IE-only ${objectText || 'element'}.currentStyle`,
+          risk:
+            'currentStyle does not exist in Chrome, so this expression is undefined and the following property read throws. It is also synchronous, while getComputedStyle returns a live object that must be read after layout — code that cached the object across a style change behaves differently.',
+          recommendation:
+            'Replace with getComputedStyle(element) and read the property from the returned object (getPropertyValue("width") for kebab-case names). If the value was cached and reused later, re-read it instead of holding the object.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
 /* ------------------------------------------------------------------ *
  * DOM and browser behavior
  * ------------------------------------------------------------------ */

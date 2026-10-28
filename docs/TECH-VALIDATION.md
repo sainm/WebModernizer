@@ -158,7 +158,7 @@ finding inside it is reported at line 7, column 5 — the true position.
 
 ## 5. Verification performed
 
-- 37 rules and 11 recipes load, no duplicate ids (import-time assertion).
+- 39 rules and 12 recipes load, no duplicate ids (import-time assertion).
 - Every rule fires on a dedicated fixture (`backend/test/ruleCoverage.test.ts`); adding a rule
   without one fails the suite.
 - Full scan of `examples/legacy-app`: 12 files, 99 findings, 0 parse failures, Shift_JIS detected.

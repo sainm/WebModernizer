@@ -97,3 +97,42 @@ describe('recipes added after the first review', () => {
     expect(mismatched.map((rule) => rule.meta.id)).toEqual([]);
   });
 });
+
+describe('navigation and computed style rules', () => {
+  it('does not mistake a framework router for the IE navigation call', () => {
+    const code = ['router.navigate("/orders/1");', 'this.$router.navigate(target);'].join('\n');
+    const findings = analyze('app.js', code);
+    expect(findings.filter((finding) => finding.ruleId === 'WL-JS-016')).toHaveLength(0);
+  });
+
+  it('reports the window-level call and rewrites it to location.assign', () => {
+    const code = 'window.navigate("/orders/1");\n';
+    const findings = analyze('app.js', code);
+    const hit = findings.find((finding) => finding.ruleId === 'WL-JS-016');
+    expect(hit).toBeDefined();
+    expect(hit?.migrationLevel).toBe('CONDITIONAL');
+
+    const rewritten = transform('app.js', code, 'WL-JS-016');
+    expect(rewritten.preconditions?.ok).toBe(true);
+    expect(rewritten.after).toBe('location.assign("/orders/1");\n');
+    expect(analyze('app.js', rewritten.after as string).filter((f) => f.ruleId === 'WL-JS-016')).toHaveLength(0);
+  });
+
+  it('treats a bare navigate() as the same API but refuses object methods', () => {
+    const bare = transform('app.js', 'navigate("/x");\n', 'WL-JS-016');
+    expect(bare.preconditions?.ok).toBe(true);
+    expect(bare.after).toBe('location.assign("/x");\n');
+
+    const router = analyze('app.js', 'router.navigate("/x");');
+    expect(router.filter((f) => f.ruleId === 'WL-JS-016')).toHaveLength(0);
+  });
+
+  it('reports currentStyle with the object it was read from', () => {
+    const findings = analyze('app.js', 'var h = panel.currentStyle.height;');
+    const hit = findings.find((finding) => finding.ruleId === 'WL-DOM-002');
+    expect(hit).toBeDefined();
+    expect(hit?.message).toContain('panel.currentStyle');
+    expect(hit?.migrationLevel).toBe('MANUAL');
+    expect(recipeForRule('WL-DOM-002')).toBeNull();
+  });
+});

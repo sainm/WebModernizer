@@ -350,6 +350,56 @@ const execScriptRecipe: Recipe = {
   },
 };
 
+const navigateRecipe: Recipe = {
+  id: 'RCP-NAVIGATE',
+  name: 'window.navigate -> location.assign',
+  version: '1.0.0',
+  ruleIds: ['WL-JS-016'],
+  level: 'CONDITIONAL',
+  summary: 'Replaces the IE navigation call with location.assign on the same argument.',
+  caveats: [
+    'location.assign keeps the current page in the back stack; use location.replace if the old code relied on not being able to go back.',
+    'Only the window-level call is rewritten; framework routers named .navigate are untouched.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit || hit.node.type !== 'CallExpression') {
+      return { ok: false, reasons: ['The matched call no longer exists at this position.'] };
+    }
+    const callee = hit.node.callee as JsNode | undefined;
+    if (!callee) return { ok: false, reasons: ['The call has no callee.'] };
+    const isMember = callee.type === 'MemberExpression' && propIdent(callee)?.name === 'navigate';
+    const isBare = callee.type === 'Identifier' && String(callee.name ?? '').toLowerCase() === 'navigate';
+    if (!isMember && !isBare) return { ok: false, reasons: ['The call is no longer window.navigate.'] };
+    if (isMember) {
+      const object = (callee as JsNode).object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || String(object.name) !== 'window') {
+        return { ok: false, reasons: ['An object method named .navigate is not the IE API and must not be rewritten.'] };
+      }
+    }
+    const args = (hit.node.arguments as JsNode[]) ?? [];
+    if (args.length !== 1) {
+      return { ok: false, reasons: ['window.navigate with an unexpected argument count needs a manual rewrite.'] };
+    }
+    return { ok: true, reasons: ['Confirm whether the old page should stay in the back stack (assign vs replace).'] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) return null;
+    const callee = hit.node.callee as JsNode | undefined;
+    if (!callee || typeof callee.start !== 'number' || typeof callee.end !== 'number') return null;
+    return [
+      {
+        start: callee.start,
+        end: callee.end,
+        newText: 'location.assign',
+        ruleId: 'WL-JS-016',
+        reason: 'window.navigate is IE-only; location.assign performs the same navigation in Chrome.',
+      },
+    ];
+  },
+};
+
 export const jsRecipes: Recipe[] = [
   srcElementRecipe,
   cancelBubbleRecipe,
@@ -358,4 +408,5 @@ export const jsRecipes: Recipe[] = [
   eventBindingRecipe('detachEvent'),
   fireEventRecipe,
   execScriptRecipe,
+  navigateRecipe,
 ];

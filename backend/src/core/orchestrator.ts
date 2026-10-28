@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { analyzeParsedFile } from '../analysis/engine.js';
 import { buildRelations, extractRefFacts, type FileRefFacts } from '../analysis/projectReferences.js';
-import { RECIPE_RULE_IDS } from '../recipes/registry.js';
+import { RECIPE_RULE_IDS, ruleSignature } from '../recipes/registry.js';
 import { sha256, newId, nowIso } from '../model/ids.js';
 import type { AnalysisFinding, ParseProblem, ScanPhase, ScanStatus, SourceFile } from '../model/types.js';
 import { SCAN_PHASES } from '../model/types.js';
@@ -12,7 +12,7 @@ import type { Store, ScanFileRow } from '../storage/store.js';
 import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js';
 import { decodeBuffer } from './textDecode.js';
 import { writeScanReport } from './report.js';
-import { findIgnoreMatch, describeIgnoreRule } from './ignoreRules.js';
+import { findIgnoreMatch, ignoreNote } from './ignoreRules.js';
 
 export interface ScanEvent {
   scanId: string;
@@ -200,6 +200,34 @@ export class ScanManager {
       /* ---------------- phases 3-5: parse + detect ---------------- */
       setPhase('PARSING');
       let sinceYield = 0;
+
+      // Incremental scan: an unchanged file whose rules have not changed either can reuse
+      // the previous results. The rule signature guards against reusing findings that a
+      // changed rule set would no longer produce.
+      const signature = ruleSignature();
+      const previous = this.store
+        .listScans(task.projectId, 5)
+        .find(
+          (candidate) =>
+            candidate.id !== scanId &&
+            candidate.ruleSignature === signature &&
+            (candidate.status === 'COMPLETED' || candidate.status === 'COMPLETED_WITH_WARNINGS'),
+        );
+      const previousFiles = previous ? new Map(this.store.listScanFiles(previous.id).map((file) => [file.path, file])) : null;
+      // One query for the whole previous scan instead of one per file: on a 1 400-file
+      // project that turns 1 400 round trips into a single read.
+      const previousFindings = new Map<string, AnalysisFinding[]>();
+      if (previous) {
+        for (const finding of this.store.listAllFindings(previous.id)) {
+          const list = previousFindings.get(finding.filePath) ?? [];
+          list.push(finding);
+          previousFindings.set(finding.filePath, list);
+        }
+      }
+      const reusedPaths = new Set<string>();
+      if (previous) {
+        this.log(runner, scanId, 'info', 'PARSING', `Incremental: comparing against scan ${previous.id}`);
+      }
       for (const entry of discovery.files) {
         this.checkpoint(runner);
         scannedCount += 1;
@@ -214,6 +242,33 @@ export class ScanManager {
         try {
           const buffer = readFileSync(entry.absolutePath);
           rawHash = sha256(buffer);
+
+          const reusable = previousFiles?.get(entry.relPath);
+          if (previous && reusable && reusable.hash === rawHash) {
+            // Same bytes, same rules: copy the findings instead of parsing again.
+            reusedPaths.add(entry.relPath);
+            encoding = reusable.encoding;
+            status = reusable.parseStatus === 'SKIPPED' ? 'PARSED' : reusable.parseStatus;
+            fileFindings = (previousFindings.get(entry.relPath) ?? []).map((finding) => ({
+              ...finding,
+              id: newId('fnd'),
+              scanTaskId: scanId,
+            }));
+            for (const finding of fileFindings) {
+              const match = findIgnoreMatch(finding, ignoreRules);
+              if (!match) {
+                // A rule may have been added since; drop the stale rule note.
+                if (finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith('Ignored by project rule')) {
+                  finding.status = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL' ? 'READY_FOR_MIGRATION' : 'DETECTED';
+                  finding.statusNote = undefined;
+                }
+                continue;
+              }
+              finding.status = 'IGNORED';
+              finding.statusNote = ignoreNote(match.rule, match.reason);
+            }
+            sourceFile = null;
+          } else {
           const decoded = decodeBuffer(buffer, {
             candidates: config.encodingCandidates,
             forceEncoding: config.forceEncoding,
@@ -252,11 +307,12 @@ export class ScanManager {
               const match = findIgnoreMatch(finding, ignoreRules);
               if (!match) continue;
               finding.status = 'IGNORED';
-              finding.statusNote = `Ignored by project rule (${describeIgnoreRule(match.rule)}): ${match.reason}`;
+              finding.statusNote = ignoreNote(match.rule, match.reason);
               finding.statusUpdatedAt = nowIso();
               ignoredCount += 1;
             }
             facts.push(extractRefFacts(parsed));
+          }
           }
         } catch (err) {
           status = 'FAILED';
@@ -283,6 +339,7 @@ export class ScanManager {
           encoding,
           parseStatus: status,
           findingCount: fileFindings.length,
+          reused: reusedPaths.has(entry.relPath),
         });
 
         if (scannedCount % 20 === 0) emitProgress(entry.relPath);
@@ -301,6 +358,19 @@ export class ScanManager {
       setPhase('REFERENCE_ANALYSIS');
       const allPaths = new Set(discovery.files.map((f) => f.relPath));
       const referenceResult = buildRelations(facts, allPaths);
+
+      // Reused files were not parsed, so their outgoing references come from the previous
+      // scan. Targets may have changed, but the source file did not.
+      if (previous && reusedPaths.size > 0) {
+        const seen = new Set(referenceResult.relations.map((rel) => `${rel.fromPath}|${rel.toPath}|${rel.kind}`));
+        for (const relation of this.store.listRelations(previous.id)) {
+          if (!reusedPaths.has(relation.fromPath)) continue;
+          const key = `${relation.fromPath}|${relation.toPath}|${relation.kind}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          referenceResult.relations.push(relation);
+        }
+      }
       for (const item of referenceResult.unresolved.slice(0, 50)) {
         this.log(
           runner,
@@ -325,6 +395,9 @@ export class ScanManager {
       this.store.insertFindings(findings);
       this.store.insertParseProblems(scanId, problems);
       this.store.insertRelations(scanId, referenceResult.relations);
+      if (reusedPaths.size > 0) {
+        this.log(runner, scanId, 'info', 'FINDING_MERGE', `Reused ${reusedPaths.size} unchanged file(s) from ${previous?.id}`);
+      }
       this.store.updateScan(scanId, {
         scannedFileCount: scannedCount,
         parsedFileCount: parsedCount,

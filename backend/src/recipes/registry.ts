@@ -1,4 +1,5 @@
 import type { AnalysisFinding } from '../model/types.js';
+import { RULES } from '../analysis/rules/index.js';
 import { standardForMs } from '../analysis/cssStandards.js';
 import { cssRecipes } from './cssRecipes.js';
 import { htmlRecipes } from './htmlRecipes.js';
@@ -8,6 +9,16 @@ import type { Recipe } from './types.js';
 export const RECIPES: Recipe[] = [...jsRecipes, ...htmlRecipes, ...cssRecipes];
 
 export const RECIPE_MAP: Map<string, Recipe> = new Map(RECIPES.map((recipe) => [recipe.id, recipe]));
+
+/**
+ * Fingerprint of everything that can change what a scan produces. An incremental scan
+ * may only reuse findings when this matches the previous scan exactly.
+ */
+export function ruleSignature(): string {
+  const rules = RULES.map((rule) => `${rule.meta.id}@${rule.meta.version}`).sort();
+  const recipes = RECIPES.map((recipe) => `${recipe.id}@${recipe.version}`).sort();
+  return `${rules.join('|')}::${recipes.join('|')}`;
+}
 
 /** Rule ids that have a working recipe; the analyzer uses this to gate SAFE/CONDITIONAL levels. */
 export const RECIPE_RULE_IDS: Set<string> = new Set(RECIPES.flatMap((recipe) => recipe.ruleIds));

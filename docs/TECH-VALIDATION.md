@@ -336,3 +336,56 @@ Measured on a project that already ignores `WL-CSS-004` under `css/**`:
 The dialog debounces the call by 300 ms and renders the breakdown as badges; an empty result is
 shown as a warning ("no finding matches this rule") rather than as a silent zero, because a rule
 that matches nothing is almost always a typo in the glob.
+
+---
+
+## 10. Sixth increment — three follow-ups
+
+### 10.1 Applying rules to an existing scan
+
+Creating an ignore rule only changed the next scan, which made the impact preview look like a
+promise the tool did not keep. `applyIgnoreRules()` re-evaluates one stored scan in both
+directions: matching findings become IGNORED (note records rule + reason), and findings silenced
+by a rule that no longer matches are restored to `READY_FOR_MIGRATION` / `DETECTED`. Manual
+ignores are never touched — only notes written by the engine are undone, which is why the note
+prefix is a shared constant rather than an inline string.
+
+Both UI paths call it right after creating, toggling or deleting a rule.
+
+### 10.2 Visual regression: masking and a viewport matrix
+
+`POST /api/scans/:id/validation/visual/matrix` captures the page at desktop (1280×900), tablet
+(768×1024) and mobile (390×844), each against its own baseline (`<pageKey>@<viewport>`), so a
+desktop-only check cannot hide a broken small layout. Volatile regions are masked by selector
+(`mask: [locator, …]`) instead of being compared.
+
+Two determinism problems surfaced while measuring, both fixed at the source rather than papered
+over with masking:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| ~2 000 px diff on every desktop capture | Monaco caret blinking | `cursorBlink: 'solid'` |
+| A whole text line differed between runs | syntax highlighting still loading after `load` | wait for `networkidle` + 500 ms settle |
+
+After both fixes, repeated captures of the same page report 0 diff pixels at all three viewports
+(one residual 0.03 % sample was observed before the settle; documented, not hidden).
+
+### 10.3 Incremental scans
+
+A file is reused when its hash matches the previous scan **and** the rule signature matches.
+The signature is `id@version` of every rule plus every recipe, stored on the scan, so adding a
+rule or bumping a version invalidates reuse automatically. Reused findings are copied with new
+ids, re-checked against current ignore rules, and their outgoing references are carried over —
+otherwise the dependency graph would silently lose edges for unchanged files.
+
+Measured on a synthetic 1 440-file project (120 copies of the fixture):
+
+| Run | Wall clock | Parsed | Reused | Findings |
+| --- | --- | --- | --- | --- |
+| cold | 14.8 s | 1 440 | 0 | 11 880 |
+| warm | 13.2 s | 0 | 1 440 | 11 880 |
+
+Only ~11 % end-to-end, because the same run reads every file: 9.5 s of read+SHA-256 against
+5.4 s of parsing and 0.4 s of analysis. The saving is real CPU work, but it is not the bottleneck
+on this filesystem. A size+mtime shortcut would skip the read and is deliberately not taken —
+reuse must be provable from content, not metadata.

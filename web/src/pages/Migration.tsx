@@ -13,6 +13,12 @@ import { useI18n } from '../i18n';
 import { Card, Empty, ErrorBox, LevelBadge, Loading, PageHead, SeverityBadge, useToast } from '../components/ui';
 import { DiffViewer, languageForPath } from '../components/editors';
 
+const VIEWPORT_PRESETS = [
+  { name: 'desktop', width: 1280, height: 900 },
+  { name: 'tablet', width: 768, height: 1024 },
+  { name: 'mobile', width: 390, height: 844 },
+];
+
 export default function Migration() {
   const { scanId: routeScanId } = useParams();
   const { t, level, findingMessage } = useI18n();
@@ -33,7 +39,9 @@ export default function Migration() {
   const [validation, setValidation] = useState<ValidationReport | null>(null);
   const [visualUrl, setVisualUrl] = useState('http://localhost:5173/');
   const [visualKey, setVisualKey] = useState('index');
-  const [visual, setVisual] = useState<VisualValidationResult | null>(null);
+  const [visualResults, setVisualResults] = useState<VisualValidationResult[] | null>(null);
+  const [maskInput, setMaskInput] = useState('');
+  const [viewportNames, setViewportNames] = useState<string[]>(['desktop']);
   const { toast, node } = useToast();
 
   const automatable = useMemo(
@@ -120,14 +128,21 @@ export default function Migration() {
     if (!scanId) return;
     setBusy(true);
     try {
-      const result = await api.validateVisual(scanId, {
+      const chosen = VIEWPORT_PRESETS.filter((preset) => viewportNames.includes(preset.name));
+      const result = await api.validateVisualMatrix(scanId, {
         url: visualUrl.trim(),
         pageKey: visualKey.trim() || 'page',
         updateBaseline,
+        maskSelectors: maskInput
+          .split(',')
+          .map((selector) => selector.trim())
+          .filter(Boolean),
+        viewports: chosen.length > 0 ? chosen : [VIEWPORT_PRESETS[0]],
       });
-      setVisual(result);
-      if (!result.available) toast(result.reason ?? t('visual.unavailable'));
-      else if (result.baselineCreated) toast(t('visual.baselineCreated'));
+      setVisualResults(result.results);
+      const first = result.results[0];
+      if (first && !first.available) toast(first.reason ?? t('visual.unavailable'));
+      else if (result.results.some((item) => item.baselineCreated)) toast(t('visual.baselineCreated'));
     } catch (err) {
       toast((err as Error).message);
     } finally {
@@ -337,15 +352,42 @@ export default function Migration() {
       <div style={{ marginTop: 14 }}>
         <Card title={t('visual.title')}>
           <div className="hint" style={{ marginBottom: 10 }}>{t('visual.hint')}</div>
-          <div className="row wrap" style={{ alignItems: 'flex-end', gap: 8 }}>
-            <div className="field" style={{ marginBottom: 0, minWidth: 320, flex: 1 }}>
+          <div className="row wrap" style={{ alignItems: 'flex-end', gap: 8, marginBottom: 10 }}>
+            <div className="field" style={{ marginBottom: 0, minWidth: 300, flex: 1 }}>
               <label>{t('visual.url')}</label>
               <input className="input mono" value={visualUrl} onChange={(event) => setVisualUrl(event.target.value)} placeholder="http://localhost:5173/" />
             </div>
-            <div className="field" style={{ marginBottom: 0, width: 180 }}>
+            <div className="field" style={{ marginBottom: 0, width: 160 }}>
               <label>{t('visual.pageKey')}</label>
               <input className="input mono" value={visualKey} onChange={(event) => setVisualKey(event.target.value)} placeholder="index" />
             </div>
+            <div className="field" style={{ marginBottom: 0, minWidth: 220, flex: 1 }}>
+              <label>{t('visual.mask')}</label>
+              <input
+                className="input mono"
+                value={maskInput}
+                onChange={(event) => setMaskInput(event.target.value)}
+                placeholder=".clock, #banner-ad"
+              />
+            </div>
+          </div>
+
+          <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
+            <span className="hint">{t('visual.viewports')}</span>
+            {VIEWPORT_PRESETS.map((preset) => (
+              <button
+                key={preset.name}
+                className={`chip ${viewportNames.includes(preset.name) ? 'on' : ''}`}
+                onClick={() =>
+                  setViewportNames((current) =>
+                    current.includes(preset.name) ? current.filter((name) => name !== preset.name) : [...current, preset.name],
+                  )
+                }
+              >
+                {preset.name} · {preset.width}×{preset.height}
+              </button>
+            ))}
+            <div className="spacer" />
             <button className="btn" disabled={busy || !visualUrl.trim()} onClick={() => runVisual(false)}>
               {busy ? <span className="spinner" /> : null} {t('visual.compare')}
             </button>
@@ -354,41 +396,52 @@ export default function Migration() {
             </button>
           </div>
 
-          {visual ? (
-            visual.available ? (
-              <div style={{ marginTop: 12 }}>
-                <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
-                  {visual.baselineCreated ? (
-                    <span className="badge accent">{t('visual.baselineCreated')}</span>
-                  ) : visual.changedPixels === 0 && !visual.dimensionMismatch ? (
-                    <span className="badge ok">{t('visual.unchanged')}</span>
-                  ) : (
-                    <span className="badge high">{t('visual.changed')}</span>
-                  )}
-                  <span className="badge neutral">
-                    {t('visual.diffPercent')}: {visual.diffPercent}%
-                  </span>
-                  <span className="mono muted" style={{ fontSize: 11 }}>
-                    {visual.changedPixels} / {visual.totalPixels} px · {visual.width}×{visual.height} · {visual.durationMs} ms
-                  </span>
-                  {visual.dimensionMismatch ? <span className="badge high">{t('visual.dimension')}</span> : null}
+          {(visualResults ?? []).map((result) => (
+            <div key={result.pageKey} style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+                <span className="mono" style={{ fontSize: 11 }}>{result.pageKey}</span>
+                {!result.available ? (
+                  <span className="badge warn">{t('visual.unavailable')}</span>
+                ) : result.baselineCreated ? (
+                  <span className="badge accent">{t('visual.baselineCreated')}</span>
+                ) : result.changedPixels === 0 && !result.dimensionMismatch ? (
+                  <span className="badge ok">{t('visual.unchanged')}</span>
+                ) : (
+                  <span className="badge high">{t('visual.changed')}</span>
+                )}
+                {result.available ? (
+                  <>
+                    <span className="badge neutral">
+                      {t('visual.diffPercent')}: {result.diffPercent}%
+                    </span>
+                    <span className="mono muted" style={{ fontSize: 11 }}>
+                      {result.changedPixels} / {result.totalPixels} px · {result.width}×{result.height} · {result.durationMs} ms
+                    </span>
+                    {result.dimensionMismatch ? <span className="badge high">{t('visual.dimension')}</span> : null}
+                  </>
+                ) : (
+                  <span className="dim" style={{ fontSize: 11.5 }}>{result.reason}</span>
+                )}
+              </div>
+
+              {result.available && result.consoleErrors.length ? (
+                <div className="callout warn" style={{ marginBottom: 8, fontSize: 11.5 }}>
+                  <strong>{t('visual.consoleErrors')}</strong>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {result.consoleErrors.slice(0, 4).map((error) => (
+                      <li key={error} className="mono">{error}</li>
+                    ))}
+                  </ul>
                 </div>
-                {visual.consoleErrors.length ? (
-                  <div className="callout warn" style={{ marginBottom: 8, fontSize: 11.5 }}>
-                    <strong>{t('visual.consoleErrors')}</strong>
-                    <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                      {visual.consoleErrors.slice(0, 4).map((error) => (
-                        <li key={error} className="mono">{error}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
+              ) : null}
+
+              {result.available && result.screenshotDataUrl ? (
                 <div className="grid-2">
                   <div>
                     <div className="section-title">{t('visual.baseline')}</div>
-                    {visual.baselineDataUrl ? (
+                    {result.baselineDataUrl ? (
                       <img
-                        src={visual.baselineDataUrl}
+                        src={result.baselineDataUrl}
                         alt={t('visual.baseline')}
                         style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
                       />
@@ -398,24 +451,16 @@ export default function Migration() {
                   </div>
                   <div>
                     <div className="section-title">{t('visual.current')}</div>
-                    {visual.screenshotDataUrl ? (
-                      <img
-                        src={visual.screenshotDataUrl}
-                        alt={t('visual.current')}
-                        style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
-                      />
-                    ) : (
-                      <Empty />
-                    )}
+                    <img
+                      src={result.screenshotDataUrl}
+                      alt={t('visual.current')}
+                      style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
+                    />
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="callout warn" style={{ marginTop: 12 }}>
-                <strong>{t('visual.unavailable')}</strong> — {visual.reason}
-              </div>
-            )
-          ) : null}
+              ) : null}
+            </div>
+          ))}
         </Card>
       </div>
       {node}

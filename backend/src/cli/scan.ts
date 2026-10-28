@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { ScanManager } from '../core/orchestrator.js';
 import { buildSummary, reportsDir } from '../core/report.js';
 import { defaultProjectConfig } from '../core/scanner.js';
+import { ruleSignature } from '../recipes/registry.js';
 import { Store } from '../storage/store.js';
 import type { ScanStatus } from '../model/types.js';
 
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
   }
 
   const project = store.createProject(args.name ?? rootPath.split('/').pop() ?? 'project', rootPath, config);
-  const scan = store.createScan(project, config);
+  const scan = store.createScan(project, config, ruleSignature());
   scans.start(scan.id);
 
   const started = Date.now();

@@ -21,6 +21,7 @@ export default function ProjectDetail() {
   const [savingRule, setSavingRule] = useState(false);
   const [impact, setImpact] = useState<IgnoreImpact | null>(null);
   const [impactLoading, setImpactLoading] = useState(false);
+  const [ruleNotice, setRuleNotice] = useState<string | null>(null);
 
   // Preview what the typed rule would silence, before it is saved.
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function ProjectDetail() {
       setPathPattern('');
       setReason('');
       ignoreRules.reload();
+      await reapplyRules();
     } catch (err) {
       setRuleError((err as Error).message);
     } finally {
@@ -63,10 +65,23 @@ export default function ProjectDetail() {
     }
   };
 
+  /** Rules otherwise only apply on the next scan; re-evaluate the newest one in place. */
+  const reapplyRules = async (): Promise<void> => {
+    if (!projectId) return;
+    try {
+      const applied = await api.applyIgnoreRules(projectId);
+      setRuleNotice(t('ignore.applied', { ignored: applied.ignored, unignored: applied.unignored }));
+      project.reload();
+    } catch (err) {
+      setRuleError((err as Error).message);
+    }
+  };
+
   const toggleIgnoreRule = async (id: string, enabled: boolean): Promise<void> => {
     try {
       await api.setIgnoreRuleEnabled(id, enabled);
       ignoreRules.reload();
+      await reapplyRules();
     } catch (err) {
       setRuleError((err as Error).message);
     }
@@ -76,6 +91,7 @@ export default function ProjectDetail() {
     try {
       await api.deleteIgnoreRule(id);
       ignoreRules.reload();
+      await reapplyRules();
     } catch (err) {
       setRuleError((err as Error).message);
     }
@@ -194,6 +210,11 @@ export default function ProjectDetail() {
                 {savingRule ? <span className="spinner" /> : null} {t('project.addIgnoreRule')}
               </button>
             </div>
+            {ruleNotice ? (
+              <div className="callout ok" style={{ marginTop: 10 }}>
+                {ruleNotice}
+              </div>
+            ) : null}
             {impactLoading ? (
               <div className="hint" style={{ marginTop: 6 }}>
                 <span className="spinner" /> {t('ignore.previewCounting')}

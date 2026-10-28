@@ -63,6 +63,7 @@ export interface ScanTask {
   currentFile: string | null;
   errorSummary: string | null;
   configSnapshot: ProjectConfig;
+  ruleSignature: string | null;
 }
 
 export interface Project {
@@ -312,6 +313,8 @@ export interface ScanFile {
   encoding: string;
   parseStatus: 'PARSED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
   findingCount: number;
+  /** Unchanged since the previous scan, so its findings were carried over. */
+  reused: boolean;
 }
 
 export interface Meta {
@@ -367,6 +370,11 @@ export const api = {
     request<IgnoreRule>(`/projects/${projectId}/ignore-rules`, { method: 'POST', body: JSON.stringify(body) }),
   previewIgnoreRule: (projectId: string, body: { ruleId?: string | null; pathPattern?: string | null; scanTaskId?: string }) =>
     request<IgnoreImpact>(`/projects/${projectId}/ignore-rules/preview`, { method: 'POST', body: JSON.stringify(body) }),
+  applyIgnoreRules: (projectId: string, scanTaskId?: string) =>
+    request<{ scanTaskId: string; ignored: number; unignored: number; unchanged: number }>(
+      `/projects/${projectId}/ignore-rules/apply`,
+      { method: 'POST', body: JSON.stringify({ scanTaskId }) },
+    ),
   setIgnoreRuleEnabled: (id: string, enabled: boolean) =>
     request<{ id: string; enabled: boolean }>(`/ignore-rules/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
   deleteIgnoreRule: (id: string) => request<{ deleted: boolean }>(`/ignore-rules/${id}`, { method: 'DELETE' }),
@@ -430,6 +438,16 @@ export const api = {
     }),
   validateVisual: (scanId: string, body: { url: string; pageKey: string; updateBaseline?: boolean; width?: number; height?: number }) =>
     request<VisualValidationResult>(`/scans/${scanId}/validation/visual`, { method: 'POST', body: JSON.stringify(body) }),
+  validateVisualMatrix: (
+    scanId: string,
+    body: {
+      url: string;
+      pageKey: string;
+      updateBaseline?: boolean;
+      maskSelectors?: string[];
+      viewports?: Array<{ name: string; width: number; height: number }>;
+    },
+  ) => request<{ results: VisualValidationResult[] }>(`/scans/${scanId}/validation/visual/matrix`, { method: 'POST', body: JSON.stringify(body) }),
   validateBrowser: (scanId: string, url: string) =>
     request<ValidationReport>(`/scans/${scanId}/validation/browser`, { method: 'POST', body: JSON.stringify({ url }) }),
 

@@ -258,6 +258,8 @@ export interface ScanTask {
   errorSummary: string | null;
   /** Project config snapshot captured when the scan started */
   configSnapshot: ProjectConfig;
+  /** Fingerprint of the rule + recipe set used for this scan; reuse is only valid when it matches. */
+  ruleSignature: string | null;
 }
 
 export interface ScanSummary {

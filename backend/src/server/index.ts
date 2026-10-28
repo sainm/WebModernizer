@@ -7,11 +7,12 @@ import { MigrationService } from '../core/migration.js';
 import { ScanManager } from '../core/orchestrator.js';
 import { buildSummary, reportAsCsv, reportAsHtml, reportAsJson, writeScanReport } from '../core/report.js';
 import { countIgnoreMatches } from '../core/ignoreRules.js';
+import { applyIgnoreRules } from '../core/ignoreApply.js';
 import { defaultProjectConfig, discoverFiles, isWithinRoot, resolveProjectPath } from '../core/scanner.js';
 import { ValidationService } from '../core/validation.js';
 import { newId, sha256 } from '../model/ids.js';
 import type { Category, FindingStatus, Language, MigrationLevel, ProjectConfig, Severity } from '../model/types.js';
-import { automationHint, automationStatus, recipeForFinding, recipeForRule } from '../recipes/registry.js';
+import { automationHint, automationStatus, recipeForFinding, recipeForRule, ruleSignature } from '../recipes/registry.js';
 import { RECIPES } from '../recipes/registry.js';
 import { Store } from '../storage/store.js';
 
@@ -281,6 +282,25 @@ export function createServer(store: Store): ServerContext {
     res.json({ scanTaskId: scan.id, ...impact });
   });
 
+  /** Re-evaluate the stored findings of one scan against the current rules. */
+  app.post('/api/projects/:id/ignore-rules/apply', (req, res) => {
+    const project = store.getProject(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { scanTaskId?: string };
+    const scans = store.listScans(project.id, 20);
+    const scan = body.scanTaskId
+      ? scans.find((item) => item.id === body.scanTaskId)
+      : (scans.find((item) => item.status === 'COMPLETED') ?? scans[0]);
+    if (!scan) {
+      res.status(409).json({ error: 'this project has no scan to apply rules to' });
+      return;
+    }
+    res.json(applyIgnoreRules(store, scan.id));
+  });
+
   app.patch('/api/ignore-rules/:ruleId', (req, res) => {
     const enabled = Boolean((req.body as { enabled?: boolean }).enabled);
     const updated = store.setIgnoreRuleEnabled(req.params.ruleId, enabled);
@@ -316,7 +336,7 @@ export function createServer(store: Store): ServerContext {
       }
       const body = req.body as { config?: unknown };
       const config = body?.config ? normalizeConfig(body.config) : normalizeConfig(project.config);
-      const scan = store.createScan(project, config);
+      const scan = store.createScan(project, config, ruleSignature());
       scans.start(scan.id);
       res.status(202).json(scan);
     }),
@@ -739,6 +759,50 @@ export function createServer(store: Store): ServerContext {
         updateBaseline: Boolean(body.updateBaseline),
         width: Number(body.width) > 0 ? Number(body.width) : undefined,
         height: Number(body.height) > 0 ? Number(body.height) : undefined,
+      });
+      res.json(result);
+    }),
+  );
+
+  app.post(
+    '/api/scans/:id/validation/visual/matrix',
+    asyncHandler(async (req, res) => {
+      const scan = store.getScan(req.params.id);
+      if (!scan) {
+        res.status(404).json({ error: 'scan not found' });
+        return;
+      }
+      const body = (req.body ?? {}) as {
+        url?: string;
+        pageKey?: string;
+        updateBaseline?: boolean;
+        maskSelectors?: string[];
+        viewports?: Array<{ name?: string; width?: number; height?: number }>;
+      };
+      if (!body.url || !/^https?:\/\//i.test(body.url)) {
+        res.status(400).json({ error: 'url must be an absolute http(s) URL' });
+        return;
+      }
+      const viewports = (body.viewports ?? [])
+        .filter((item) => Number(item.width) > 0 && Number(item.height) > 0)
+        .slice(0, 4)
+        .map((item, index) => ({
+          name: (item.name ?? `vp${index + 1}`).replace(/[^a-zA-Z0-9_-]+/g, '-'),
+          width: Math.min(Number(item.width), 3840),
+          height: Math.min(Number(item.height), 2160),
+        }));
+      const maskSelectors = (body.maskSelectors ?? [])
+        .map((selector) => selector.trim())
+        .filter(Boolean)
+        .slice(0, 20);
+
+      const result = await validation.validateVisualMatrix({
+        scanTaskId: scan.id,
+        url: body.url,
+        pageKey: body.pageKey?.trim() || 'page',
+        updateBaseline: Boolean(body.updateBaseline),
+        maskSelectors,
+        viewports: viewports.length > 0 ? viewports : undefined,
       });
       res.json(result);
     }),

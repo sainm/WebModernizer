@@ -19,6 +19,8 @@ import { dataRoot } from './report.js';
 interface BrowserInstance {
   newPage(options?: Record<string, unknown>): Promise<{
     evaluate<T>(fn: () => T | Promise<T>): Promise<T>;
+    locator(selector: string): unknown;
+    waitForLoadState(state: 'load' | 'networkidle', options?: Record<string, unknown>): Promise<void>;
     screenshot(options?: Record<string, unknown>): Promise<Buffer>;
     on(event: 'console', handler: (message: BrowserConsoleMessage) => void): void;
     on(event: 'pageerror', handler: (error: Error) => void): void;
@@ -199,6 +201,10 @@ export class ValidationService {
    * for this page key, and report the share of differing pixels. The first capture for
    * a page becomes the baseline instead of pretending to be a "pass".
    */
+  /**
+   * Visual check for one page at one viewport. Kept as the single-viewport entry point
+   * (used by scripts and the earlier UI) while `validateVisualMatrix` loops over it.
+   */
   async validateVisual(options: {
     scanTaskId: string;
     url: string;
@@ -207,19 +213,86 @@ export class ValidationService {
     width?: number;
     height?: number;
     timeoutMs?: number;
+    maskSelectors?: string[];
   }): Promise<VisualValidationResult> {
     const scan = this.store.getScan(options.scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${options.scanTaskId}`);
+    return this.runVisualCheck({
+      scan,
+      url: options.url,
+      baselineKey: options.pageKey,
+      label: options.pageKey,
+      width: options.width ?? 1280,
+      height: options.height ?? 900,
+      timeoutMs: options.timeoutMs ?? 20000,
+      maskSelectors: options.maskSelectors ?? [],
+      updateBaseline: Boolean(options.updateBaseline),
+    });
+  }
 
-    const width = options.width ?? 1280;
-    const height = options.height ?? 900;
+  /**
+   * Captures the same page at several viewports and compares each against its own
+   * baseline (`<pageKey>@<viewport>`), so a desktop-only check cannot hide a broken
+   * tablet or mobile layout.
+   */
+  async validateVisualMatrix(options: {
+    scanTaskId: string;
+    url: string;
+    pageKey: string;
+    updateBaseline?: boolean;
+    timeoutMs?: number;
+    maskSelectors?: string[];
+    viewports?: Array<{ name: string; width: number; height: number }>;
+  }): Promise<{ results: VisualValidationResult[] }> {
+    const scan = this.store.getScan(options.scanTaskId);
+    if (!scan) throw new Error(`Unknown scan ${options.scanTaskId}`);
+
+    const viewports = options.viewports?.length
+      ? options.viewports
+      : [
+          { name: 'desktop', width: 1280, height: 900 },
+          { name: 'tablet', width: 768, height: 1024 },
+          { name: 'mobile', width: 390, height: 844 },
+        ];
+
+    const results: VisualValidationResult[] = [];
+    for (const viewport of viewports) {
+      results.push(
+        await this.runVisualCheck({
+          scan,
+          url: options.url,
+          baselineKey: `${options.pageKey}@${viewport.name}`,
+          label: `${options.pageKey} · ${viewport.name}`,
+          width: viewport.width,
+          height: viewport.height,
+          timeoutMs: options.timeoutMs ?? 20000,
+          maskSelectors: options.maskSelectors ?? [],
+          updateBaseline: Boolean(options.updateBaseline),
+        }),
+      );
+    }
+    return { results };
+  }
+
+  private async runVisualCheck(params: {
+    scan: NonNullable<ReturnType<Store['getScan']>>;
+    url: string;
+    baselineKey: string;
+    label: string;
+    width: number;
+    height: number;
+    timeoutMs: number;
+    maskSelectors: string[];
+    updateBaseline: boolean;
+  }): Promise<VisualValidationResult> {
+    const { scan, url, baselineKey, label, width, height, timeoutMs, maskSelectors } = params;
     const started = Date.now();
-    const pageKey = options.pageKey.replace(/[^a-zA-Z0-9._-]+/g, '-') || 'page';
+    const pageKey = baselineKey.replace(/[^a-zA-Z0-9._@-]+/g, '-') || 'page';
     const dir = join(dataRoot(), 'visual', scan.projectId, pageKey);
     const base: VisualValidationResult = {
       available: false,
       pageKey,
-      url: options.url,
+      url,
       width,
       height,
       screenshotPath: '',
@@ -233,7 +306,7 @@ export class ValidationService {
       durationMs: 0,
     };
 
-    const capture = await this.capturePage(options.url, width, height, options.timeoutMs ?? 20000);
+    const capture = await this.capturePage(url, width, height, timeoutMs, maskSelectors);
     if (!capture.available || !capture.png) {
       return { ...base, available: false, reason: capture.reason, consoleErrors: capture.consoleErrors, durationMs: Date.now() - started };
     }
@@ -244,20 +317,20 @@ export class ValidationService {
     const dimensions = pngDimensions(capture.png);
 
     const baseline = this.store.getVisualBaseline(scan.projectId, pageKey);
-    const shouldCreate = !baseline || options.updateBaseline;
+    const shouldCreate = !baseline || params.updateBaseline;
     if (shouldCreate) {
       const baselinePath = join(dir, 'baseline.png');
       copyFileSync(screenshotPath, baselinePath);
       this.store.upsertVisualBaseline({
         projectId: scan.projectId,
         pageKey,
-        url: options.url,
+        url,
         path: baselinePath,
         width: dimensions.width,
         height: dimensions.height,
         hash: sha256(readFileSync(baselinePath)),
       });
-      this.store.insertValidationRun(options.scanTaskId, 'VISUAL', true, { pageKey, baselineCreated: true });
+      this.store.insertValidationRun(scan.id, 'VISUAL', true, { pageKey, label, baselineCreated: true, masked: capture.maskedCount });
       return {
         ...base,
         available: true,
@@ -289,11 +362,13 @@ export class ValidationService {
     const baselineBuffer = readFileSync(baseline.path);
     const diff = comparePngs(baselineBuffer, capture.png);
     const passed = diff.changedPixels === 0 && !diff.dimensionMismatch;
-    this.store.insertValidationRun(options.scanTaskId, 'VISUAL', passed, {
+    this.store.insertValidationRun(scan.id, 'VISUAL', passed, {
       pageKey,
+      label,
       diffPercent: diff.diffPercent,
       changedPixels: diff.changedPixels,
       dimensionMismatch: diff.dimensionMismatch,
+      masked: capture.maskedCount,
     });
 
     return {
@@ -320,7 +395,8 @@ export class ValidationService {
     width: number,
     height: number,
     timeoutMs: number,
-  ): Promise<{ available: boolean; reason?: string; png: Buffer | null; consoleErrors: string[] }> {
+    maskSelectors: string[] = [],
+  ): Promise<{ available: boolean; reason?: string; png: Buffer | null; consoleErrors: string[]; maskedCount: number }> {
     const moduleName = 'playwright';
     let playwright: {
       chromium: { launch: (options?: Record<string, unknown>) => Promise<BrowserInstance> };
@@ -334,6 +410,7 @@ export class ValidationService {
           'Playwright is not installed. Install it (npm i -D playwright && npx playwright install chromium) to enable visual regression.',
         png: null,
         consoleErrors: [],
+        maskedCount: 0,
       };
     }
 
@@ -347,12 +424,24 @@ export class ValidationService {
       });
       page.on('pageerror', (error: Error) => consoleErrors.push(`pageerror: ${error.message}`));
       await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
-      // Give late layout (fonts, images) a moment to settle before capturing.
-      await page.evaluate(() => new Promise((done) => setTimeout(done, 350)));
-      const png = await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' });
-      return { available: true, png, consoleErrors: consoleErrors.slice(0, 50) };
+      // Single-page apps finish rendering after `load`: chunks, fonts and syntax
+      // highlighting arrive later, and capturing mid-way produces diffs that look like
+      // regressions. Wait for the network to go quiet, then let layout settle.
+      await page.waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, 10000) }).catch(() => undefined);
+      await page.evaluate(() => new Promise((done) => setTimeout(done, 500)));
+
+      // Volatile regions (clocks, carousels, ad slots) are masked rather than compared:
+      // comparing them produces a diff on every run and hides real regressions.
+      const mask = maskSelectors.map((selector) => page.locator(selector));
+      const png = await page.screenshot({
+        fullPage: true,
+        type: 'png',
+        animations: 'disabled',
+        ...(mask.length > 0 ? { mask } : {}),
+      } as Record<string, unknown>);
+      return { available: true, png, consoleErrors: consoleErrors.slice(0, 50), maskedCount: mask.length };
     } catch (err) {
-      return { available: false, reason: (err as Error).message, png: null, consoleErrors };
+      return { available: false, reason: (err as Error).message, png: null, consoleErrors, maskedCount: 0 };
     } finally {
       await browserInstance?.close().catch(() => undefined);
     }

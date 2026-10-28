@@ -7,6 +7,7 @@ import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
 import { countIgnoreMatches, findIgnoreMatch, globToRegExp, pathMatches } from '../src/core/ignoreRules.js';
+import { applyIgnoreRules } from '../src/core/ignoreApply.js';
 import { buildSummary } from '../src/core/report.js';
 import { Store } from '../src/storage/store.js';
 import type { IgnoreRule, ScanStatus } from '../src/model/types.js';
@@ -182,5 +183,111 @@ describe('ignore rule impact preview', () => {
   it('handles an empty scan', () => {
     const impact = countIgnoreMatches([], { ruleId: null, pathPattern: null, enabled: true });
     expect(impact.matched).toBe(0);
+  });
+});
+
+describe('applying rules to an existing scan', () => {
+  async function scanOnly(): Promise<{ store: Store; scanId: string; projectId: string }> {
+    const dir = mkdtempSync(join(tmpdir(), 'weblift-apply-'));
+    const projectDir = join(dir, 'legacy-app');
+    cpSync(exampleRoot, projectDir, { recursive: true });
+    const store = new Store({ dataDir: join(dir, 'data') });
+    harnesses.push({ dir, store });
+
+    const scans = new ScanManager(store);
+    const project = store.createProject('Apply Test', projectDir, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig());
+    scans.start(scan.id);
+
+    const started = Date.now();
+    while (Date.now() - started < 30000) {
+      const current = store.getScan(scan.id);
+      if (current && TERMINAL.includes(current.status)) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    return { store, scanId: scan.id, projectId: project.id };
+  }
+
+  it('silences matching findings of the scan that already ran', async () => {
+    const { store, scanId, projectId } = await scanOnly();
+    expect(store.listAllFindings(scanId).filter((f) => f.status === 'IGNORED')).toHaveLength(0);
+
+    store.createIgnoreRule({
+      projectId,
+      ruleId: 'WL-CSS-005',
+      pathPattern: 'css/**',
+      reason: 'hacks are removed in a later batch',
+      enabled: true,
+      createdBy: 'test',
+    });
+
+    const result = applyIgnoreRules(store, scanId);
+    expect(result.ignored).toBeGreaterThan(0);
+
+    const silenced = store.listAllFindings(scanId).filter((f) => f.ruleId === 'WL-CSS-005');
+    expect(silenced.every((f) => f.status === 'IGNORED')).toBe(true);
+    expect(silenced[0].statusNote).toContain('hacks are removed in a later batch');
+  });
+
+  it('restores findings when the rule stops applying', async () => {
+    const { store, scanId, projectId } = await scanOnly();
+    const rule = store.createIgnoreRule({
+      projectId,
+      ruleId: 'WL-CSS-005',
+      pathPattern: 'css/**',
+      reason: 'temporary',
+      enabled: true,
+      createdBy: 'test',
+    });
+    applyIgnoreRules(store, scanId);
+
+    store.setIgnoreRuleEnabled(rule.id, false);
+    const result = applyIgnoreRules(store, scanId);
+    expect(result.unignored).toBeGreaterThan(0);
+
+    const restored = store.listAllFindings(scanId).filter((f) => f.ruleId === 'WL-CSS-005');
+    expect(restored.every((f) => f.status !== 'IGNORED')).toBe(true);
+    // SAFE/CONDITIONAL findings go back to "ready", everything else to "detected".
+    for (const finding of restored) {
+      const expected = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL' ? 'READY_FOR_MIGRATION' : 'DETECTED';
+      expect(finding.status).toBe(expected);
+    }
+  });
+
+  it('never undoes a manual ignore', async () => {
+    const { store, scanId, projectId } = await scanOnly();
+    const manual = store.listAllFindings(scanId).find((f) => f.ruleId === 'WL-JS-003')!;
+    store.updateFindingStatus(manual.id, 'IGNORED', 'user', 'someone decided this by hand');
+
+    store.createIgnoreRule({
+      projectId,
+      ruleId: 'WL-CSS-005',
+      pathPattern: 'css/**',
+      reason: 'css debt',
+      enabled: true,
+      createdBy: 'test',
+    });
+
+    applyIgnoreRules(store, scanId);
+    const after = store.getFinding(manual.id)!;
+    expect(after.status).toBe('IGNORED');
+    expect(after.statusNote).toBe('someone decided this by hand');
+  });
+
+  it('is idempotent when nothing changes', async () => {
+    const { store, scanId, projectId } = await scanOnly();
+    store.createIgnoreRule({
+      projectId,
+      ruleId: 'WL-CSS-005',
+      pathPattern: 'css/**',
+      reason: 'css debt',
+      enabled: true,
+      createdBy: 'test',
+    });
+    const first = applyIgnoreRules(store, scanId);
+    const second = applyIgnoreRules(store, scanId);
+    expect(second.ignored).toBe(0);
+    expect(second.unignored).toBe(0);
+    expect(second.unchanged).toBe(first.unchanged + first.ignored);
   });
 });

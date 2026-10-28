@@ -77,6 +77,18 @@ export function findIgnoreMatch(
   return null;
 }
 
+/** Prefix that marks a status note as written by the ignore-rule engine. */
+export const IGNORE_NOTE_PREFIX = 'Ignored by project rule';
+
+export function ignoreNote(rule: IgnoreRuleScope, reason: string): string {
+  return `${IGNORE_NOTE_PREFIX} (${describeIgnoreRule(rule)}): ${reason}`;
+}
+
+/** True when this finding was silenced by a rule (not by a human). */
+export function isIgnoredByRule(finding: Pick<AnalysisFinding, 'status' | 'statusNote'>): boolean {
+  return finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith(IGNORE_NOTE_PREFIX);
+}
+
 /** Human-readable form used in the finding status note and in reports. */
 export function describeIgnoreRule(rule: IgnoreRuleScope): string {
   const target = rule.ruleId ?? 'any rule';

@@ -36,6 +36,8 @@ export interface ScanFileRow {
   encoding: string;
   parseStatus: 'PARSED' | 'PARTIAL' | 'FAILED' | 'SKIPPED';
   findingCount: number;
+  /** True when this file was unchanged and its findings came from the previous scan. */
+  reused: boolean;
 }
 
 export interface FindingQuery {
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS scan_task (
   current_file TEXT,
   error_summary TEXT,
   config_snapshot TEXT NOT NULL,
+  rule_signature TEXT,
   log_json TEXT NOT NULL DEFAULT '[]',
   cancelled INTEGER NOT NULL DEFAULT 0
 );
@@ -95,7 +98,8 @@ CREATE TABLE IF NOT EXISTS scan_file (
   encoding TEXT NOT NULL DEFAULT 'utf-8',
   parse_status TEXT NOT NULL,
   problem_count INTEGER NOT NULL DEFAULT 0,
-  finding_count INTEGER NOT NULL DEFAULT 0
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  reused INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_scanfile_task ON scan_file(scan_task_id);
 CREATE INDEX IF NOT EXISTS idx_scanfile_path ON scan_file(scan_task_id, path);
@@ -297,6 +301,19 @@ export class Store {
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_migration_batch ON migration_execution(batch_id)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_migration_session ON migration_execution(session_id)');
 
+    const scanColumns = (this.db.prepare('PRAGMA table_info(scan_task)').all() as unknown as Array<{ name: string }>).map(
+      (row) => row.name,
+    );
+    if (!scanColumns.includes('rule_signature')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN rule_signature TEXT');
+    }
+    const fileColumns = (this.db.prepare('PRAGMA table_info(scan_file)').all() as unknown as Array<{ name: string }>).map(
+      (row) => row.name,
+    );
+    if (!fileColumns.includes('reused')) {
+      this.db.exec('ALTER TABLE scan_file ADD COLUMN reused INTEGER NOT NULL DEFAULT 0');
+    }
+
     const findingColumns = (this.db.prepare('PRAGMA table_info(finding)').all() as unknown as Array<{ name: string }>).map(
       (row) => row.name,
     );
@@ -362,7 +379,7 @@ export class Store {
 
   /* ----------------------------- scans ----------------------------- */
 
-  createScan(project: Project, config: ProjectConfig): ScanTask {
+  createScan(project: Project, config: ProjectConfig, ruleSignature: string | null = null): ScanTask {
     const task: ScanTask = {
       id: newId('scn'),
       projectId: project.id,
@@ -380,13 +397,14 @@ export class Store {
       currentFile: null,
       errorSummary: null,
       configSnapshot: config,
+      ruleSignature,
     };
     this.db
       .prepare(
-        `INSERT INTO scan_task (id, project_id, project_name, root_path, status, phase, created_at, config_snapshot, log_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
+        `INSERT INTO scan_task (id, project_id, project_name, root_path, status, phase, created_at, config_snapshot, rule_signature, log_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')`,
       )
-      .run(task.id, task.projectId, task.projectName, task.rootPath, task.status, null, task.createdAt, JSON.stringify(config));
+      .run(task.id, task.projectId, task.projectName, task.rootPath, task.status, null, task.createdAt, JSON.stringify(config), ruleSignature);
     return task;
   }
 
@@ -461,13 +479,24 @@ export class Store {
 
   insertScanFiles(rows: ScanFileRow[]): void {
     const stmt = this.db.prepare(
-      `INSERT INTO scan_file (id, scan_task_id, path, language, size, hash, encoding, parse_status, finding_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO scan_file (id, scan_task_id, path, language, size, hash, encoding, parse_status, finding_count, reused)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     this.db.exec('BEGIN');
     try {
       for (const row of rows) {
-        stmt.run(row.id, row.scanTaskId, row.path, row.language, row.size, row.hash, row.encoding, row.parseStatus, row.findingCount);
+        stmt.run(
+          row.id,
+          row.scanTaskId,
+          row.path,
+          row.language,
+          row.size,
+          row.hash,
+          row.encoding,
+          row.parseStatus,
+          row.findingCount,
+          row.reused ? 1 : 0,
+        );
       }
       this.db.exec('COMMIT');
     } catch (err) {
@@ -490,6 +519,7 @@ export class Store {
       encoding: row.encoding,
       parseStatus: row.parse_status as ScanFileRow['parseStatus'],
       findingCount: row.finding_count,
+      reused: row.reused === 1,
     }));
   }
 
@@ -508,6 +538,7 @@ export class Store {
       encoding: row.encoding,
       parseStatus: row.parse_status as ScanFileRow['parseStatus'],
       findingCount: row.finding_count,
+      reused: row.reused === 1,
     };
   }
 
@@ -623,6 +654,14 @@ export class Store {
       .all(...params, limit, offset) as unknown as FindingRow[];
 
     return { total: totalRow.c, items: rows.map(mapFinding) };
+  }
+
+  /** Findings of a single file; used to carry results over on incremental scans. */
+  listFindingsForFile(scanTaskId: string, filePath: string): AnalysisFinding[] {
+    const rows = this.db
+      .prepare('SELECT * FROM finding WHERE scan_task_id = ? AND file_path = ? ORDER BY start_offset')
+      .all(scanTaskId, filePath) as unknown as FindingRow[];
+    return rows.map(mapFinding);
   }
 
   listAllFindings(scanTaskId: string): AnalysisFinding[] {
@@ -947,6 +986,7 @@ interface ScanRow {
   current_file: string | null;
   error_summary: string | null;
   config_snapshot: string;
+  rule_signature: string | null;
 }
 
 interface ScanFileRowRaw {
@@ -960,6 +1000,7 @@ interface ScanFileRowRaw {
   parse_status: string;
   problem_count: number;
   finding_count: number;
+  reused: number;
 }
 
 interface FindingRow {
@@ -1071,6 +1112,7 @@ function mapScan(row: ScanRow): ScanTask {
     currentFile: row.current_file,
     errorSummary: row.error_summary,
     configSnapshot: JSON.parse(row.config_snapshot) as ProjectConfig,
+    ruleSignature: row.rule_signature ?? null,
   };
 }
 

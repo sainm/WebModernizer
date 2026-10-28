@@ -129,6 +129,14 @@ per project in that case.
 **Large-file and binary handling is coarse.** Files above 2 MB are skipped with a recorded reason;
 binary detection is a NUL-byte probe over the first 8 KB.
 
+**Incremental scans skip parsing, not file reads.** A file is reused only when its SHA-256 and
+the rule signature both match the previous scan, so every file is still read once. On a normal
+filesystem that read is negligible; in a sandboxed environment it dominated the measurement
+(1 440 files, 2 MB: 9.5 s of read+hash versus 5.4 s of parsing). The measured end-to-end gain was
+therefore only ~11 %, while the CPU work it removes is ~38 %. A size+mtime fast path would avoid
+the read, but the tool trades that speed for the guarantee that a reused finding was computed from
+the exact same bytes.
+
 **Performance is single-process and synchronous per file.** The fixture (12 files) scans in ~0.3 s.
 A 5 000-file legacy tree will work but blocks the event loop in bursts; the orchestrator yields
 every 8 files so SSE and cancellation stay responsive. Parallel workers are the obvious next step.
@@ -144,8 +152,6 @@ every 8 files so SSE and cancellation stay responsive. Parallel workers are the 
    the visible result immediately instead of after a rescan.
 3. **Diff masking and a viewport matrix for visual regression** — mask volatile regions by
    selector, and capture desktop/tablet/mobile so responsive breakage is caught too.
-4. **Incremental scans**: reuse parse results for unchanged files by hash. Storage already
-   records per-file hashes, so this is mostly orchestration work.
-5. **Rule authoring safeguards**: a JSON-schema check plus a required fixture per rule, so adding
+4. **Rule authoring safeguards**: a JSON-schema check plus a required fixture per rule, so adding
    a rule without tests fails the build instead of silently lowering coverage.
 

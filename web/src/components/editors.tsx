@@ -49,6 +49,9 @@ const BASE_OPTIONS = {
   scrollbar: { verticalScrollbarSize: 9, horizontalScrollbarSize: 9 },
   padding: { top: 8, bottom: 8 },
   automaticLayout: true,
+  // A blinking caret makes every screenshot differ by a few thousand pixels, which
+  // shows up as a false visual regression. Render a steady one instead.
+  cursorBlink: 'solid' as const,
   contextmenu: false,
   wordWrap: 'off' as const,
 };

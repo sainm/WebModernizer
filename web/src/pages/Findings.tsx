@@ -132,10 +132,15 @@ export default function Findings() {
         pathPattern: pattern,
         reason: ruleReason.trim(),
       });
+      // Rules normally take effect on the next scan; applying them to the scan the user is
+      // looking at keeps the preview they just saw honest.
+      const applied = await api.applyIgnoreRules(projectId, current.scanTaskId);
       setRuleCreated(pattern ?? t('findings.ignoreRuleAny'));
       setRuleOpen(false);
       setRuleReason('');
-      toast(t('findings.ignoreRuleCreated', { pattern: pattern ?? t('findings.ignoreRuleAny') }));
+      list.reload();
+      detail.reload();
+      toast(t('ignore.applied', { ignored: applied.ignored, unignored: applied.unignored }));
     } catch (err) {
       setRuleError((err as Error).message);
     } finally {

@@ -141,6 +141,7 @@ const en = {
   'ignore.previewNone': 'No finding in the current scan matches this rule.',
   'ignore.previewResult': 'Would silence {new} new finding(s) — {total} matched, {already} already ignored.',
   'ignore.previewFailed': 'Could not preview the impact.',
+  'ignore.applied': 'Applied to the current scan: {ignored} silenced, {unignored} restored.',
   'project.ignoreRuleApplies': 'Applies from the next scan; existing results are unchanged.',
 
   'scans.title': 'Scans',
@@ -172,6 +173,7 @@ const en = {
   'scan.viewDependencies': 'View dependencies',
   'scan.export': 'Export report',
   'scan.encoding': 'Encoding',
+  'scan.reused': 'reused',
   'scan.size': 'Size',
   'scan.noScan': 'Scan not found',
 
@@ -286,6 +288,8 @@ const en = {
   'visual.hint': 'Capture the first screenshot as a baseline, then compare after migrating. Pixel diff catches layout that static analysis cannot see.',
   'visual.url': 'Page URL',
   'visual.pageKey': 'Page key',
+  'visual.mask': 'Mask selectors (comma separated)',
+  'visual.viewports': 'Viewports',
   'visual.compare': 'Compare with baseline',
   'visual.updateBaseline': 'Capture / replace baseline',
   'visual.baselineCreated': 'Baseline captured',
@@ -484,6 +488,7 @@ const zh: Dict = {
   'ignore.previewNone': '当前扫描中没有匹配这条规则的问题。',
   'ignore.previewResult': '将新增静音 {new} 条 —— 共匹配 {total} 条，其中 {already} 条已被忽略。',
   'ignore.previewFailed': '无法预演影响面。',
+  'ignore.applied': '已应用到当前扫描：静音 {ignored} 条，恢复 {unignored} 条。',
   'project.ignoreRuleApplies': '从下一次扫描开始生效，已有结果不变。',
 
   'scans.title': '扫描任务',
@@ -515,6 +520,7 @@ const zh: Dict = {
   'scan.viewDependencies': '查看依赖',
   'scan.export': '导出报告',
   'scan.encoding': '编码',
+  'scan.reused': '复用',
   'scan.size': '大小',
   'scan.noScan': '未找到扫描任务',
 
@@ -629,6 +635,8 @@ const zh: Dict = {
   'visual.hint': '先截一次图作为基线，迁移后再比对。像素差异能发现静态分析看不到的布局问题。',
   'visual.url': '页面地址',
   'visual.pageKey': '页面标识',
+  'visual.mask': '遮罩选择器（逗号分隔）',
+  'visual.viewports': '视口',
   'visual.compare': '与基线比对',
   'visual.updateBaseline': '截图 / 重建基线',
   'visual.baselineCreated': '基线已建立',
@@ -824,6 +832,7 @@ const ja: Dict = {
   'ignore.previewNone': '現在のスキャンに一致する指摘はありません。',
   'ignore.previewResult': '新たに {new} 件を除外します（一致 {total} 件、既に除外 {already} 件）。',
   'ignore.previewFailed': '影響範囲を取得できませんでした。',
+  'ignore.applied': '現在のスキャンに適用しました（除外 {ignored} 件、復元 {unignored} 件）。',
   'project.ignoreRuleApplies': '次回のスキャンから有効です。既存の結果は変わりません。',
 
   'scans.title': 'スキャン',
@@ -855,6 +864,7 @@ const ja: Dict = {
   'scan.viewDependencies': '依存を見る',
   'scan.export': 'レポート出力',
   'scan.encoding': 'エンコーディング',
+  'scan.reused': '再利用',
   'scan.size': 'サイズ',
   'scan.noScan': 'スキャンが見つかりません',
 
@@ -969,6 +979,8 @@ const ja: Dict = {
   'visual.hint': '最初のキャプチャを基準として保存し、移行後に比較します。静的解析では見えないレイアウト崩れを検出できます。',
   'visual.url': 'ページ URL',
   'visual.pageKey': 'ページキー',
+  'visual.mask': 'マスクするセレクタ（カンマ区切り）',
+  'visual.viewports': 'ビューポート',
   'visual.compare': '基準と比較',
   'visual.updateBaseline': 'キャプチャ / 基準を更新',
   'visual.baselineCreated': '基準を保存しました',

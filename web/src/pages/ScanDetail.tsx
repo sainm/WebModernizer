@@ -243,7 +243,8 @@ export default function ScanDetail() {
                   <td>
                     <span className={`badge ${file.parseStatus === 'FAILED' ? 'high' : file.parseStatus === 'PARTIAL' ? 'warn' : 'ok'}`}>
                       {file.parseStatus}
-                    </span>
+                    </span>{' '}
+                    {file.reused ? <span className="badge neutral">{t('scan.reused')}</span> : null}
                   </td>
                 </tr>
               ))}

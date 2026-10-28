@@ -272,3 +272,37 @@ Measured on the fixture (two files in one call: `css/main.css` + `js/legacy-even
 The regression suite gained `backend/test/transaction.test.ts` (4 cases); one of them caught the
 same class of bug as before — an index created in the schema block on a column that an upgraded
 database does not have yet.
+
+---
+
+## 8. Fourth increment — project-level ignore rules
+
+Per-finding `IGNORED` existed but was useless in practice: the next scan forgot it and the same
+accepted risk came back. Rules are now stored on the project and applied while the scan runs.
+
+Matching is deliberately small: `*` stays inside a segment, `**` crosses segments (and also
+matches zero segments, so `**/*.js` covers a root file), `?` is one character, everything else is
+literal. A rule may scope by rule id, by path glob, or both; either side may be empty, which
+means "any". The reason field is mandatory at the API level — an accepted risk has to say why,
+otherwise the rule is just a mute button.
+
+Semantics that matter:
+
+- Rules are applied **after** detection and level normalization, so they only change `status`,
+  never the evidence or the automation level.
+- The status note records the rule and the reason (`Ignored by project rule (WL-CSS-004 · css/**): …`),
+  so the decision survives in exports and in the finding history.
+- An ignored finding is **not migratable**: the plan reports it as blocked with an explicit
+  reason, because silently migrating something a human accepted is worse than either option.
+- Rules apply to future scans only. Existing scans keep their statuses — no retroactive rewrite.
+
+Measured on the fixture with one rule (`WL-CSS-004` · `css/**`):
+
+| Scan | findings | ignored |
+| --- | --- | --- |
+| before the rule | 99 | 0 |
+| after the rule | 99 | 5 (exactly the five `-ms-` findings under `css/`) |
+
+Creating a rule without a reason returns 400; an unknown rule id returns 400; a pattern with a
+leading `/` or `..` returns 400. The suite gained 10 cases in `backend/test/ignoreRules.test.ts`
+(glob semantics, precedence, disabled rules, and the scan-time integration).

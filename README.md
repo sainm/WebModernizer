@@ -82,6 +82,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | 11 migration recipes with preview diff, hash-verified apply, batch rollback | done |
 | Static validation after migration | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
+| Project-level ignore rules (rule + path glob, with a mandatory reason) | done |
 | Visual regression: Playwright screenshot + pixel diff against a stored baseline | done (optional dependency) |
 | JSON / CSV / HTML reports traceable to a scan | done |
 | UI in Chinese, Japanese, English | done |

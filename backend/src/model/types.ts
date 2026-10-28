@@ -272,6 +272,8 @@ export interface ScanSummary {
     unsupported: number;
     /** MANUAL findings where a mechanical rewrite exists in principle but no recipe ships yet. */
     automationCandidates: number;
+    /** Findings silenced by a project ignore rule. */
+    ignored: number;
   };
   byCategory: Array<{ category: Category; label: string; count: number }>;
   bySeverity: Array<{ severity: Severity; count: number }>;
@@ -358,6 +360,25 @@ export interface MigrationExecution {
    * migration is all-or-nothing and can be reverted as a unit.
    */
   sessionId: string | null;
+}
+
+/**
+ * A project-level decision to stop reporting a class of finding.
+ *
+ * Scoped by rule and/or path so "we accept this here" is expressible, instead of
+ * ignoring findings one by one and losing the decision on the next scan.
+ */
+export interface IgnoreRule {
+  id: string;
+  projectId: string;
+  /** null = every rule */
+  ruleId: string | null;
+  /** Glob relative to the project root; null = every file */
+  pathPattern: string | null;
+  reason: string;
+  enabled: boolean;
+  createdBy: string;
+  createdAt: string;
 }
 
 /** Stored reference screenshot for one page of a project. */

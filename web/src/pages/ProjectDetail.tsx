@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, formatDuration, formatTime } from '../api';
 import { useAsync } from '../hooks';
@@ -9,6 +10,54 @@ export default function ProjectDetail() {
   const { t, scanStatus } = useI18n();
   const navigate = useNavigate();
   const project = useAsync(() => api.getProject(projectId as string), [projectId]);
+  const ignoreRules = useAsync(
+    () => (projectId ? api.listIgnoreRules(projectId) : Promise.resolve({ items: [] })),
+    [projectId],
+  );
+  const [ruleId, setRuleId] = useState('');
+  const [pathPattern, setPathPattern] = useState('');
+  const [reason, setReason] = useState('');
+  const [ruleError, setRuleError] = useState<string | null>(null);
+  const [savingRule, setSavingRule] = useState(false);
+
+  const addIgnoreRule = async (): Promise<void> => {
+    if (!projectId || !reason.trim()) return;
+    setSavingRule(true);
+    setRuleError(null);
+    try {
+      await api.createIgnoreRule(projectId, {
+        ruleId: ruleId.trim() || null,
+        pathPattern: pathPattern.trim() || null,
+        reason: reason.trim(),
+      });
+      setRuleId('');
+      setPathPattern('');
+      setReason('');
+      ignoreRules.reload();
+    } catch (err) {
+      setRuleError((err as Error).message);
+    } finally {
+      setSavingRule(false);
+    }
+  };
+
+  const toggleIgnoreRule = async (id: string, enabled: boolean): Promise<void> => {
+    try {
+      await api.setIgnoreRuleEnabled(id, enabled);
+      ignoreRules.reload();
+    } catch (err) {
+      setRuleError((err as Error).message);
+    }
+  };
+
+  const removeIgnoreRule = async (id: string): Promise<void> => {
+    try {
+      await api.deleteIgnoreRule(id);
+      ignoreRules.reload();
+    } catch (err) {
+      setRuleError((err as Error).message);
+    }
+  };
 
   if (project.loading) return <Loading />;
   if (project.error) return <div className="page"><ErrorBox error={project.error} onRetry={project.reload} /></div>;
@@ -92,6 +141,75 @@ export default function ProjectDetail() {
                     <td className="num">{scan.findingCount}</td>
                     <td className="right mono muted" style={{ fontSize: 10.5 }}>
                       {scan.id.slice(0, 10)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <Card title={t('project.ignoreRules')} flush>
+          <div style={{ padding: '12px 14px 4px' }}>
+            <div className="hint" style={{ marginBottom: 10 }}>{t('project.ignoreRulesHint')}</div>
+            {ruleError ? <div className="callout danger" style={{ marginBottom: 10 }}>{ruleError}</div> : null}
+            <div className="row wrap" style={{ alignItems: 'flex-end', gap: 8 }}>
+              <div className="field" style={{ marginBottom: 0, width: 170 }}>
+                <label>{t('project.ignoreRuleRule')}</label>
+                <input className="input mono" value={ruleId} onChange={(event) => setRuleId(event.target.value)} placeholder="WL-CSS-004" />
+              </div>
+              <div className="field" style={{ marginBottom: 0, width: 220 }}>
+                <label>{t('project.ignoreRulePath')}</label>
+                <input className="input mono" value={pathPattern} onChange={(event) => setPathPattern(event.target.value)} placeholder="vendor/**" />
+              </div>
+              <div className="field" style={{ marginBottom: 0, minWidth: 240, flex: 1 }}>
+                <label>{t('project.ignoreRuleReason')}</label>
+                <input className="input" value={reason} onChange={(event) => setReason(event.target.value)} />
+              </div>
+              <button className="btn primary" onClick={addIgnoreRule} disabled={savingRule || !reason.trim()}>
+                {savingRule ? <span className="spinner" /> : null} {t('project.addIgnoreRule')}
+              </button>
+            </div>
+            <div className="hint" style={{ marginTop: 6 }}>{t('project.ignoreRuleApplies')}</div>
+          </div>
+
+          {(ignoreRules.data?.items.length ?? 0) === 0 ? (
+            <Empty>{t('project.ignoreRulesEmpty')}</Empty>
+          ) : (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>{t('rules.id')}</th>
+                  <th>{t('project.pathPattern')}</th>
+                  <th>{t('project.ignoreRuleReason')}</th>
+                  <th>{t('findings.status')}</th>
+                  <th className="right">{t('common.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(ignoreRules.data?.items ?? []).map((rule) => (
+                  <tr key={rule.id}>
+                    <td className="mono" style={{ fontSize: 11 }}>
+                      {rule.ruleId ?? <span className="muted">{t('project.ignoreRuleAny')}</span>}
+                    </td>
+                    <td className="mono" style={{ fontSize: 11 }}>
+                      {rule.pathPattern ?? <span className="muted">{t('project.ignoreRuleAny')}</span>}
+                    </td>
+                    <td style={{ fontSize: 12 }}>{rule.reason}</td>
+                    <td>
+                      <span className={`badge ${rule.enabled ? 'ok' : 'neutral'}`}>
+                        {rule.enabled ? t('common.enabled') : t('common.disabled')}
+                      </span>
+                    </td>
+                    <td className="right nowrap">
+                      <button className="btn small" onClick={() => toggleIgnoreRule(rule.id, !rule.enabled)}>
+                        {rule.enabled ? t('common.disable') : t('common.enable')}
+                      </button>{' '}
+                      <button className="btn small danger" onClick={() => removeIgnoreRule(rule.id)}>
+                        {t('common.delete')}
+                      </button>
                     </td>
                   </tr>
                 ))}

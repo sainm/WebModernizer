@@ -116,6 +116,9 @@ export default function ScanDetail() {
         <Stat label={t('overview.manual')} value={summary.data?.totals.manual ?? '—'} />
         <Stat label={t('overview.unsupported')} value={summary.data?.totals.unsupported ?? '—'} />
         <Stat label={t('overview.candidates')} value={summary.data?.totals.automationCandidates ?? '—'} />
+        {summary.data && summary.data.totals.ignored > 0 ? (
+          <Stat label={t('overview.ignored')} value={summary.data.totals.ignored} />
+        ) : null}
       </div>
 
       <div className="tabs" style={{ padding: 0, marginBottom: 14, borderBottom: 'none', gap: 4 }}>

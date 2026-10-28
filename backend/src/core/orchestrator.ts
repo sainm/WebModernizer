@@ -12,6 +12,7 @@ import type { Store, ScanFileRow } from '../storage/store.js';
 import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js';
 import { decodeBuffer } from './textDecode.js';
 import { writeScanReport } from './report.js';
+import { findIgnoreMatch, describeIgnoreRule } from './ignoreRules.js';
 
 export interface ScanEvent {
   scanId: string;
@@ -116,6 +117,11 @@ export class ScanManager {
     const startedAt = nowIso();
     this.store.updateScan(scanId, { status: 'RUNNING', startedAt, phase: 'FILE_DISCOVERY' });
     this.emit(runner, { scanId, type: 'status', at: startedAt, status: 'RUNNING', phase: 'FILE_DISCOVERY' });
+
+    // Project decisions to stop reporting specific patterns are applied at scan time,
+    // so an accepted risk does not come back on every run.
+    const ignoreRules = this.store.listIgnoreRules(task.projectId);
+    let ignoredCount = 0;
 
     const disabledRules = new Set<string>();
     for (const [ruleId, enabled] of this.store.listRuleStates()) {
@@ -242,6 +248,14 @@ export class ScanManager {
               disabledRuleIds: disabledRules,
               recipeRuleIds: RECIPE_RULE_IDS,
             });
+            for (const finding of fileFindings) {
+              const match = findIgnoreMatch(finding, ignoreRules);
+              if (!match) continue;
+              finding.status = 'IGNORED';
+              finding.statusNote = `Ignored by project rule (${describeIgnoreRule(match.rule)}): ${match.reason}`;
+              finding.statusUpdatedAt = nowIso();
+              ignoredCount += 1;
+            }
             facts.push(extractRefFacts(parsed));
           }
         } catch (err) {
@@ -333,6 +347,9 @@ export class ScanManager {
         phase: null,
         logJson: JSON.stringify(runner.log),
       });
+      if (ignoredCount > 0) {
+        this.log(runner, scanId, 'info', 'FINDING_MERGE', `${ignoredCount} finding(s) marked ignored by project rules`);
+      }
       this.log(runner, scanId, 'info', null, `Scan finished: ${finalStatus} (${findings.length} findings)`);
       this.store.updateScan(scanId, { logJson: JSON.stringify(runner.log) });
       this.emit(runner, {

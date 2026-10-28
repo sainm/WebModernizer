@@ -195,6 +195,75 @@ export function createServer(store: Store): ServerContext {
     res.json({ deleted: true, note: 'Project record removed; source files were not modified.' });
   });
 
+  /* ------------------------------- ignore rules ------------------------------- */
+
+  app.get('/api/projects/:id/ignore-rules', (req, res) => {
+    const project = store.getProject(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    res.json({ items: store.listIgnoreRules(project.id) });
+  });
+
+  app.post('/api/projects/:id/ignore-rules', (req, res) => {
+    const project = store.getProject(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { ruleId?: string | null; pathPattern?: string | null; reason?: string; enabled?: boolean };
+    const reason = (body.reason ?? '').trim();
+    if (!reason) {
+      res.status(400).json({ error: 'reason is required: an accepted risk must say why it is accepted' });
+      return;
+    }
+    const ruleId = body.ruleId?.trim() || null;
+    if (ruleId && !RULE_MAP.has(ruleId)) {
+      res.status(400).json({ error: `unknown rule: ${ruleId}` });
+      return;
+    }
+    const pathPattern = body.pathPattern?.trim() || null;
+    if (pathPattern) {
+      if (pathPattern.startsWith('/') || pathPattern.split('/').includes('..')) {
+        res.status(400).json({ error: 'pathPattern must be relative to the project root and must not contain ".." ' });
+        return;
+      }
+      if (pathPattern.length > 200) {
+        res.status(400).json({ error: 'pathPattern is too long' });
+        return;
+      }
+    }
+    const rule = store.createIgnoreRule({
+      projectId: project.id,
+      ruleId,
+      pathPattern,
+      reason,
+      enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+      createdBy: 'user',
+    });
+    res.status(201).json(rule);
+  });
+
+  app.patch('/api/ignore-rules/:ruleId', (req, res) => {
+    const enabled = Boolean((req.body as { enabled?: boolean }).enabled);
+    const updated = store.setIgnoreRuleEnabled(req.params.ruleId, enabled);
+    if (!updated) {
+      res.status(404).json({ error: 'ignore rule not found' });
+      return;
+    }
+    res.json({ id: req.params.ruleId, enabled });
+  });
+
+  app.delete('/api/ignore-rules/:ruleId', (req, res) => {
+    const deleted = store.deleteIgnoreRule(req.params.ruleId);
+    if (!deleted) {
+      res.status(404).json({ error: 'ignore rule not found' });
+      return;
+    }
+    res.json({ deleted: true });
+  });
+
   /* ------------------------------- scans ------------------------------- */
 
   app.post(
@@ -414,8 +483,12 @@ export function createServer(store: Store): ServerContext {
     }
     const rule = RULE_MAP.get(finding.ruleId);
     const recipe = recipeForFinding(finding);
+    const scan = store.getScan(finding.scanTaskId);
     res.json({
       finding: withAutomation(finding),
+      // The UI creates project-level ignore rules from here, so it needs the owner.
+      projectId: scan?.projectId ?? null,
+      projectName: scan?.projectName ?? null,
       rule: rule?.meta ?? null,
       recipe: recipe
         ? { id: recipe.id, name: recipe.name, level: recipe.level, summary: recipe.summary, caveats: recipe.caveats }

@@ -74,6 +74,7 @@ export function buildSummary(store: Store, scanId: string): ScanSummary {
       unsupported: byLevelMap.get('UNSUPPORTED') ?? 0,
       automationCandidates: findings.filter((finding) => automationStatus(finding.ruleId, finding.evidence.detail) === 'PLANNED')
         .length,
+      ignored: byStatusMap.get('IGNORED') ?? 0,
     },
     byCategory: categories.map((category) => ({
       category,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, type Category, type Finding, type FindingStatus, type MigrationLevel, type RuleMeta, type Severity } from '../api';
 import { useAsync, useDebounced, useScanSelection } from '../hooks';
 import { useI18n } from '../i18n';
@@ -45,6 +45,13 @@ export default function Findings() {
   const [selectedId, setSelectedId] = useState<string | null>(params.get('id'));
   const [ignoreOpen, setIgnoreOpen] = useState(false);
   const [ignoreReason, setIgnoreReason] = useState('');
+  const [ruleOpen, setRuleOpen] = useState(false);
+  const [ruleScope, setRuleScope] = useState<'file' | 'dir' | 'any'>('file');
+  const [ruleReason, setRuleReason] = useState('');
+  const [ruleError, setRuleError] = useState<string | null>(null);
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const [ruleCreated, setRuleCreated] = useState<string | null>(null);
+  const navigate = useNavigate();
   const { toast, node } = useToast();
 
   const filters = {
@@ -92,6 +99,36 @@ export default function Findings() {
     if (scanId) next.set('id', selectedId ?? '');
     setParams(next, { replace: true });
     setSearch('');
+  };
+
+  const scopePattern = (filePath: string | undefined, scope: 'file' | 'dir' | 'any'): string | null => {
+    if (!filePath || scope === 'any') return null;
+    if (scope === 'file') return filePath;
+    const slash = filePath.lastIndexOf('/');
+    return slash <= 0 ? '**' : `${filePath.slice(0, slash)}/**`;
+  };
+
+  const submitIgnoreRule = async (): Promise<void> => {
+    const projectId = detail.data?.projectId;
+    if (!current || !projectId || !ruleReason.trim()) return;
+    setRuleSaving(true);
+    setRuleError(null);
+    try {
+      const pattern = scopePattern(current.filePath, ruleScope);
+      await api.createIgnoreRule(projectId, {
+        ruleId: current.ruleId,
+        pathPattern: pattern,
+        reason: ruleReason.trim(),
+      });
+      setRuleCreated(pattern ?? t('findings.ignoreRuleAny'));
+      setRuleOpen(false);
+      setRuleReason('');
+      toast(t('findings.ignoreRuleCreated', { pattern: pattern ?? t('findings.ignoreRuleAny') }));
+    } catch (err) {
+      setRuleError((err as Error).message);
+    } finally {
+      setRuleSaving(false);
+    }
   };
 
   const activeFilterCount = useMemo(
@@ -429,6 +466,17 @@ export default function Findings() {
                 <button className="btn small danger" onClick={() => setIgnoreOpen(true)}>
                   {t('findings.ignore')}
                 </button>
+                {detail.data?.projectId ? (
+                  <button
+                    className="btn small"
+                    onClick={() => {
+                      setRuleError(null);
+                      setRuleOpen(true);
+                    }}
+                  >
+                    {t('findings.ignoreRule')}
+                  </button>
+                ) : null}
                 {items.findIndex((item) => item.id === current.id) > 0 ? (
                   <button
                     className="btn small ghost"
@@ -447,6 +495,25 @@ export default function Findings() {
                 ) : null}
               </div>
             </div>
+
+            {ruleCreated ? (
+              <div className="callout ok" style={{ marginTop: 12 }}>
+                <div className="row wrap">
+                  <span className="grow">{t('findings.ignoreRuleCreated', { pattern: ruleCreated })}</span>
+                  <button
+                    className="btn small"
+                    onClick={async () => {
+                      const projectId = detail.data?.projectId;
+                      if (!projectId) return;
+                      const scan = await api.startScan(projectId);
+                      navigate(`/scans/${scan.id}`);
+                    }}
+                  >
+                    {t('findings.ignoreRuleRescan')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             {(detail.data?.history.length ?? 0) > 0 ? (
               <div className="section">
@@ -473,6 +540,53 @@ export default function Findings() {
           </div>
         )}
       </section>
+
+      {ruleOpen && current ? (
+        <Modal
+          title={t('findings.ignoreRule')}
+          onClose={() => setRuleOpen(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setRuleOpen(false)}>
+                {t('common.cancel')}
+              </button>
+              <button className="btn primary" disabled={ruleSaving || !ruleReason.trim()} onClick={submitIgnoreRule}>
+                {ruleSaving ? <span className="spinner" /> : null} {t('findings.ignoreRuleCreate')}
+              </button>
+            </>
+          }
+        >
+          {ruleError ? <div className="callout danger" style={{ marginBottom: 10 }}>{ruleError}</div> : null}
+          <dl className="kv" style={{ marginBottom: 12 }}>
+            <dt>{t('findings.rule')}</dt>
+            <dd className="mono">{current.ruleId}</dd>
+            <dt>{t('findings.file')}</dt>
+            <dd className="mono">{current.filePath}</dd>
+          </dl>
+          <div className="filter-group">
+            <div className="filter-label">{t('findings.ignoreRuleScope')}</div>
+            <div className="row wrap" style={{ gap: 4 }}>
+              {(['file', 'dir', 'any'] as const).map((scope) => (
+                <button
+                  key={scope}
+                  className={`chip ${ruleScope === scope ? 'on' : ''}`}
+                  onClick={() => setRuleScope(scope)}
+                >
+                  {scope === 'file' ? t('findings.ignoreRuleFile') : scope === 'dir' ? t('findings.ignoreRuleDir') : t('findings.ignoreRuleAny')}
+                </button>
+              ))}
+            </div>
+            <div className="hint mono" style={{ marginTop: 6 }}>
+              {scopePattern(current.filePath, ruleScope) ?? '*'}
+            </div>
+          </div>
+          <div className="field">
+            <label>{t('findings.ignoreRuleReason')}</label>
+            <textarea className="textarea" rows={3} value={ruleReason} onChange={(event) => setRuleReason(event.target.value)} />
+          </div>
+          <div className="hint">{t('project.ignoreRuleApplies')}</div>
+        </Modal>
+      ) : null}
 
       {ignoreOpen ? (
         <Modal

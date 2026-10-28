@@ -34,6 +34,13 @@ those edges are labelled `INFERRED`, and why ambiguous names are `UNKNOWN` rathe
 
 ## Migration
 
+**Ignore rules match rule + path, not code identity.** A rule silences "this rule in these files",
+which is right for accepted technical debt, but it cannot say "just this one occurrence" — use the
+per-finding ignore for that. Rules apply at scan time, so earlier scans keep their original
+statuses; nothing is rewritten retroactively. A rule can be created from the finding detail
+(scope: this file / this directory / any file), but the dialog does not yet show **how many
+current findings the rule would silence** — you find out on the next scan.
+
 **Eleven recipes, and "manual" covers three different situations.** Shipped recipes:
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
@@ -130,8 +137,8 @@ every 8 files so SSE and cancellation stay responsive. Parallel workers are the 
 1. **More recipes for the highest-volume patterns** once real projects show which ones dominate —
    `document.all`, `element.innerText` and `window.event` handler signatures are the likely
    candidates, each needing its own precondition argument.
-2. **Project-level ignore rules** (`ignore` today is per finding) so an accepted risk is not
-   re-reported on every scan.
+2. **Preview the blast radius of an ignore rule**: count matching findings while the dialog is
+   open, so "ignore this" is an informed decision rather than a guess.
 3. **Diff masking and a viewport matrix for visual regression** — mask volatile regions by
    selector, and capture desktop/tablet/mobile so responsive breakage is caught too.
 4. **Incremental scans**: reuse parse results for unchanged files by hash. Storage already

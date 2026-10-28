@@ -156,6 +156,7 @@ export interface ScanSummary {
     parseFailures: number;
     unsupported: number;
     automationCandidates: number;
+    ignored: number;
   };
   byCategory: Array<{ category: Category; label: string; count: number }>;
   bySeverity: Array<{ severity: Severity; count: number }>;
@@ -282,6 +283,17 @@ export interface ValidationReport {
   notes: string[];
 }
 
+export interface IgnoreRule {
+  id: string;
+  projectId: string;
+  ruleId: string | null;
+  pathPattern: string | null;
+  reason: string;
+  enabled: boolean;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface ScanFile {
   id: string;
   scanTaskId: string;
@@ -342,6 +354,13 @@ export const api = {
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteProject: (id: string) => request<{ deleted: boolean; note: string }>(`/projects/${id}`, { method: 'DELETE' }),
 
+  listIgnoreRules: (projectId: string) => request<{ items: IgnoreRule[] }>(`/projects/${projectId}/ignore-rules`),
+  createIgnoreRule: (projectId: string, body: { ruleId?: string | null; pathPattern?: string | null; reason: string }) =>
+    request<IgnoreRule>(`/projects/${projectId}/ignore-rules`, { method: 'POST', body: JSON.stringify(body) }),
+  setIgnoreRuleEnabled: (id: string, enabled: boolean) =>
+    request<{ id: string; enabled: boolean }>(`/ignore-rules/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  deleteIgnoreRule: (id: string) => request<{ deleted: boolean }>(`/ignore-rules/${id}`, { method: 'DELETE' }),
+
   listScans: (projectId?: string, limit = 100) =>
     request<{ items: ScanTask[] }>(`/scans?${projectId ? `projectId=${projectId}&` : ''}limit=${limit}`),
   getScan: (id: string) => request<ScanTask>(`/scans/${id}`),
@@ -364,9 +383,14 @@ export const api = {
     return request<{ total: number; items: Finding[] }>(`/scans/${scanId}/findings?${query.toString()}`);
   },
   finding: (id: string) =>
-    request<{ finding: Finding; rule: RuleMeta | null; recipe: RecordedRecipe | null; history: Array<{ id: string; fromStatus: string | null; toStatus: string; actor: string; note: string | null; at: string }> }>(
-      `/findings/${id}`,
-    ),
+    request<{
+      finding: Finding;
+      projectId: string | null;
+      projectName: string | null;
+      rule: RuleMeta | null;
+      recipe: RecordedRecipe | null;
+      history: Array<{ id: string; fromStatus: string | null; toStatus: string; actor: string; note: string | null; at: string }>;
+    }>(`/findings/${id}`),
   findingSource: (id: string) =>
     request<{ path: string; language: string; content: string; stale: boolean }>(`/findings/${id}/source`),
   setFindingStatus: (id: string, status: FindingStatus, note?: string) =>

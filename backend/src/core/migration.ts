@@ -123,6 +123,10 @@ export class MigrationService {
       const occupied: Array<{ start: number; end: number }> = [];
 
       for (const finding of fileFindings) {
+        if (finding.status === 'IGNORED') {
+          items.push(this.blockedItem(finding, 'This finding is ignored by a project rule; re-enable it before migrating.'));
+          continue;
+        }
         const recipe = recipeForFinding(finding);
         if (!recipe) {
           items.push(this.blockedItem(finding, 'No automated recipe exists for this rule.'));

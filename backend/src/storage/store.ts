@@ -22,6 +22,7 @@ import type {
   Severity,
   ValidationStatus,
   VisualBaseline,
+  IgnoreRule,
 } from '../model/types.js';
 import { newId, nowIso } from '../model/ids.js';
 
@@ -197,6 +198,18 @@ CREATE TABLE IF NOT EXISTS rule_state (
   enabled INTEGER NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ignore_rule (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  rule_id TEXT,
+  path_pattern TEXT,
+  reason TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ignore_project ON ignore_rule(project_id, created_at);
 
 CREATE TABLE IF NOT EXISTS visual_baseline (
   id TEXT PRIMARY KEY,
@@ -839,6 +852,34 @@ export class Store {
     }));
   }
 
+  listIgnoreRules(projectId: string): IgnoreRule[] {
+    const rows = this.db
+      .prepare('SELECT * FROM ignore_rule WHERE project_id = ? ORDER BY created_at ASC')
+      .all(projectId) as unknown as IgnoreRuleRow[];
+    return rows.map(mapIgnoreRule);
+  }
+
+  createIgnoreRule(input: Omit<IgnoreRule, 'id' | 'createdAt'>): IgnoreRule {
+    const rule: IgnoreRule = { ...input, id: newId('ign'), createdAt: nowIso() };
+    this.db
+      .prepare(
+        `INSERT INTO ignore_rule (id, project_id, rule_id, path_pattern, reason, enabled, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(rule.id, rule.projectId, rule.ruleId, rule.pathPattern, rule.reason, rule.enabled ? 1 : 0, rule.createdBy, rule.createdAt);
+    return rule;
+  }
+
+  setIgnoreRuleEnabled(id: string, enabled: boolean): boolean {
+    const result = this.db.prepare('UPDATE ignore_rule SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+    return Number(result.changes) > 0;
+  }
+
+  deleteIgnoreRule(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM ignore_rule WHERE id = ?').run(id);
+    return Number(result.changes) > 0;
+  }
+
   getVisualBaseline(projectId: string, pageKey: string): VisualBaseline | null {
     const row = this.db
       .prepare('SELECT * FROM visual_baseline WHERE project_id = ? AND page_key = ?')
@@ -970,6 +1011,17 @@ interface MigrationRow {
   session_id: string | null;
 }
 
+interface IgnoreRuleRow {
+  id: string;
+  project_id: string;
+  rule_id: string | null;
+  path_pattern: string | null;
+  reason: string;
+  enabled: number;
+  created_by: string;
+  created_at: string;
+}
+
 interface VisualBaselineRow {
   id: string;
   project_id: string;
@@ -1056,6 +1108,19 @@ function mapFinding(row: FindingRow): AnalysisFinding {
     status: row.status,
     statusUpdatedAt: row.status_updated_at,
     statusNote: row.status_note ?? undefined,
+  };
+}
+
+function mapIgnoreRule(row: IgnoreRuleRow): IgnoreRule {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    ruleId: row.rule_id ?? null,
+    pathPattern: row.path_pattern ?? null,
+    reason: row.reason,
+    enabled: row.enabled === 1,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
   };
 }
 

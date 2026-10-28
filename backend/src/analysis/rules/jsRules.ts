@@ -827,6 +827,143 @@ define({
   },
 });
 
+define({
+  meta: {
+    id: 'WL-DOM-003',
+    name: 'styleSheet.rules',
+    version: '1.0.0',
+    description: 'IE exposed stylesheet rules as .rules; the standard property is .cssRules.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'CONDITIONAL',
+    basis:
+      'AST match: MemberExpression with property `rules` whose object expression looks like a stylesheet (styleSheet, .sheet, a bare `sheet`). config.rules does not match.',
+    recipeId: 'RCP-CSSRULES',
+    tags: ['stylesheet', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'rules') return;
+      const object = node.object as JsNode | undefined;
+      if (!object || typeof object.start !== 'number' || typeof object.end !== 'number') return;
+      const objectText = ctx.text.slice(object.start, object.end);
+      // Guard against every other object that happens to have a `rules` property. A bare
+      // variable named `sheet` is included because `var sheet = document.styleSheets[0]`
+      // followed by `sheet.rules` is the shape this pattern actually appears in.
+      if (!/styleSheet|\.sheet\b|(^|\.)sheet$/i.test(objectText.trim())) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads ${objectText}.rules on a stylesheet`,
+          risk:
+            'IE exposed a stylesheet rules collection as .rules; Chrome only knows .cssRules. The expression is undefined, so the following .length or index access throws, and code that enumerates rules to patch or read them stops working.',
+          recommendation:
+            'Rename to .cssRules. Both collections expose the same CSSRule objects, but cross-origin stylesheets throw on access instead of returning an empty list, so keep any existing try/catch.',
+          migrationLevel: 'CONDITIONAL',
+          confidence: 'POSSIBLE',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { objectText: objectText.slice(0, 120), touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-004',
+    name: 'document.execCommand',
+    version: '1.0.0',
+    description: 'Deprecated editing command API. It still runs in Chrome, but its behaviour is uneven and removal is planned.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'LOW',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: CallExpression whose callee is document.execCommand (bare calls are not assumed to be the DOM API).',
+    tags: ['deprecated', 'editing'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || memberPath(callee) !== 'document.execCommand') return;
+      const args = (node.arguments as JsNode[]) ?? [];
+      const command = args[0]?.type === 'StringLiteral' ? String(args[0].value) : null;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Calls deprecated document.execCommand("${command ?? '?'}")`,
+          risk:
+            'execCommand still exists in Chrome, so this does not throw — which is why it survives migrations and fails later. The behaviour is uneven: cut/copy/paste need a user gesture and return false otherwise, insertHTML sanitises differently from IE, and the API is deprecated with no replacement for every command.',
+          recommendation:
+            'Replace per command: clipboard operations with navigator.clipboard, formatting with Range/Selection APIs or a small editor library. Until then, check the boolean return value instead of assuming success.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { command: command ?? '(dynamic)', argumentCount: args.length, touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-BEH-002',
+    name: 'navigator.appName IE check',
+    version: '1.0.0',
+    description: 'Reading navigator.appName to detect IE. Chrome reports "Netscape", so the branches that depend on it flip.',
+    language: 'javascript',
+    category: 'BROWSER_BEHAVIOR',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression navigator.appName. UA string literals are handled by WL-BEH-001 instead.',
+    tags: ['ua-sniffing', 'behavior'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression') return;
+      // memberPath only resolves a known set of roots (document, window, ...) and reports
+      // everything else as "*", so the object and property are checked explicitly here.
+      const object = node.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || String(object.name) !== 'navigator') return;
+      if (propName(node) !== 'appName') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Reads navigator.appName to identify the browser',
+          risk:
+            'navigator.appName returns "Netscape" in every Chromium browser, so any comparison against "Microsoft Internet Explorer" is always false. When this guards a feature, the feature is skipped without an error; when it guards a workaround, the workaround is silently dropped.',
+          recommendation:
+            'Delete the check and keep the branch that should run, or replace it with feature detection for the capability the branch actually needs. Do not substitute a different user-agent test.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0),
+            container: unit.container,
+            detail: { path: 'navigator.appName', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
 /* ------------------------------------------------------------------ *
  * DOM and browser behavior
  * ------------------------------------------------------------------ */

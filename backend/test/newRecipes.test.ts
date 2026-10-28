@@ -136,3 +136,49 @@ describe('navigation and computed style rules', () => {
     expect(recipeForRule('WL-DOM-002')).toBeNull();
   });
 });
+
+describe('stylesheet, execCommand and appName precision', () => {
+  it('only treats .rules as a stylesheet access when the object looks like one', () => {
+    const flagged = analyze('app.js', 'var first = document.styleSheets[0].rules[0];');
+    expect(flagged.filter((f) => f.ruleId === 'WL-DOM-003')).toHaveLength(1);
+
+    const decoys = analyze('app.js', ['var a = config.rules;', 'var b = myForm.rules.length;'].join('\n'));
+    expect(decoys.filter((f) => f.ruleId === 'WL-DOM-003')).toHaveLength(0);
+  });
+
+  it('rewrites .rules to .cssRules on a stylesheet', () => {
+    const code = 'var sheet = document.styleSheets[0];\nvar count = sheet.rules.length;\n';
+    const result = transform('app.js', code, 'WL-DOM-003');
+    expect(result.preconditions?.ok).toBe(true);
+    expect(result.after).toContain('sheet.cssRules.length');
+    expect(analyze('app.js', result.after as string).filter((f) => f.ruleId === 'WL-DOM-003')).toHaveLength(0);
+  });
+
+  it('flags document.execCommand but not a custom editor method', () => {
+    const flagged = analyze('app.js', 'document.execCommand("bold");');
+    const hit = flagged.find((f) => f.ruleId === 'WL-DOM-004');
+    expect(hit).toBeDefined();
+    expect(hit?.evidence.detail.command).toBe('bold');
+    // It runs in Chrome today, so it must not be reported as unsupported.
+    expect(hit?.migrationLevel).toBe('MANUAL');
+
+    const decoy = analyze('app.js', 'editor.execCommand("bold");');
+    expect(decoy.filter((f) => f.ruleId === 'WL-DOM-004')).toHaveLength(0);
+  });
+
+  it('flags navigator.appName but leaves other navigator reads alone', () => {
+    const flagged = analyze('app.js', 'var ie = navigator.appName == "Microsoft Internet Explorer";');
+    expect(flagged.filter((f) => f.ruleId === 'WL-BEH-002')).toHaveLength(1);
+
+    const decoy = analyze('app.js', 'var ua = navigator.userAgent;');
+    expect(decoy.filter((f) => f.ruleId === 'WL-BEH-002')).toHaveLength(0);
+  });
+
+  it('reports <applet> as a high-risk capability loss', () => {
+    const findings = analyze('r.html', '<html><body><applet code="Live.class" width="200"></applet></body></html>');
+    const hit = findings.find((f) => f.ruleId === 'WL-HTML-002');
+    expect(hit).toBeDefined();
+    expect(hit?.severity).toBe('HIGH');
+    expect(hit?.evidence.detail.tag).toBe('applet');
+  });
+});

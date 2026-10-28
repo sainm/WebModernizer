@@ -27,6 +27,9 @@ export const FIXTURES: Fixture[] = [
   { id: 'WL-DOM-001', file: 'r.js', code: 'el.fireEvent("onclick");' },
   { id: 'WL-DOM-002', file: 'r.js', code: 'var w = el.currentStyle.width;' },
   { id: 'WL-JS-016', file: 'r.js', code: 'window.navigate("/next.jsp");' },
+  { id: 'WL-DOM-003', file: 'r.js', code: 'var first = document.styleSheets[0].rules[0];' },
+  { id: 'WL-DOM-004', file: 'r.js', code: 'document.execCommand("bold");' },
+  { id: 'WL-BEH-002', file: 'r.js', code: 'var isIe = navigator.appName == "Microsoft Internet Explorer";' },
   { id: 'WL-BEH-001', file: 'r.js', code: 'var isIe = navigator.userAgent.indexOf("MSIE 8.0") >= 0;' },
 
   { id: 'WL-HTML-001', file: 'r.html', code: '<html><body><!--[if IE]><p>only ie</p><![endif]--></body></html>' },

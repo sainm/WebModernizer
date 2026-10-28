@@ -58,7 +58,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 126 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 131 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, diff, recipes, batching, storage upgrade, visual diff,
                 #            ignore rules, incremental reuse
 ```
@@ -76,11 +76,11 @@ like an IE API call inside a comment or a string literal must not be reported.
 | File discovery with symlink/traversal guards, binary and size filtering | done |
 | HTML, JavaScript, CSS parsing with source locations | done |
 | JSP: layered analysis of the static fragments, dynamic regions masked | done |
-| 39 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
+| 42 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
 | Scan pipeline with phases, SSE progress, cancel, persistence | done |
 | Dashboard, findings explorer with 3-pane layout + Monaco source view | done |
 | Cross-file reference graph with CONFIRMED / INFERRED / UNKNOWN edges | done |
-| 12 migration recipes with preview diff, hash-verified apply, batch rollback | done |
+| 13 migration recipes with preview diff, hash-verified apply, batch rollback | done |
 | Static validation after migration | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
 | Project-level ignore rules (rule + path glob, mandatory reason, impact preview, retro-apply) | done |
@@ -185,7 +185,7 @@ detected and that findings inside it land on the correct line.
 | # | Criterion | Where |
 | --- | --- | --- |
 | 1 | Scan a given local legacy project | `POST /api/projects/:id/scans`, CLI |
-| 2 | Classify the covered IE issues | 39 rules, `docs/RULES.md` |
+| 2 | Classify the covered IE issues | 42 rules, `docs/RULES.md` |
 | 3 | Every finding locates file + position | `analysis/engine.ts`, verified in tests |
 | 4 | Evidence and recommendation per finding | `AnalysisFinding.risk/recommendation/evidence` |
 | 5 | Dashboard → findings | Scan detail cards link into the explorer |

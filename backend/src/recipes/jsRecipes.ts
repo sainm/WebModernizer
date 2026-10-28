@@ -400,6 +400,50 @@ const navigateRecipe: Recipe = {
   },
 };
 
+const cssRulesRecipe: Recipe = {
+  id: 'RCP-CSSRULES',
+  name: 'styleSheet.rules -> cssRules',
+  version: '1.0.0',
+  ruleIds: ['WL-DOM-003'],
+  level: 'CONDITIONAL',
+  summary: 'Renames the property access on a stylesheet object.',
+  caveats: [
+    'Cross-origin stylesheets throw when .cssRules is read; keep the surrounding try/catch.',
+    'The object is identified by name, so confirm it really is a stylesheet before applying.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit || hit.node.type !== 'MemberExpression') {
+      return { ok: false, reasons: ['The matched member expression no longer exists at this position.'] };
+    }
+    const prop = propIdent(hit.node);
+    if (!prop || prop.name !== 'rules') {
+      return { ok: false, reasons: ['The property is no longer .rules, or it is computed access.'] };
+    }
+    const object = hit.node.object as JsNode | undefined;
+    const objectText = object && typeof object.start === 'number' ? ctx.text.slice(object.start, object.end ?? object.start) : '';
+    if (!/styleSheet|\.sheet\b|(^|\.)sheet$/i.test(objectText.trim())) {
+      return { ok: false, reasons: ['The object does not look like a stylesheet; refusing to rename an unrelated property.'] };
+    }
+    return { ok: true, reasons: ['Confirm the stylesheet is same-origin, otherwise reading cssRules throws.'] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) return null;
+    const prop = propIdent(hit.node);
+    if (!prop || typeof prop.start !== 'number' || typeof prop.end !== 'number') return null;
+    return [
+      {
+        start: prop.start,
+        end: prop.end,
+        newText: 'cssRules',
+        ruleId: 'WL-DOM-003',
+        reason: 'Chrome exposes the stylesheet rules collection as cssRules; .rules is IE-only.',
+      },
+    ];
+  },
+};
+
 export const jsRecipes: Recipe[] = [
   srcElementRecipe,
   cancelBubbleRecipe,
@@ -409,4 +453,5 @@ export const jsRecipes: Recipe[] = [
   fireEventRecipe,
   execScriptRecipe,
   navigateRecipe,
+  cssRulesRecipe,
 ];

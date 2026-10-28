@@ -1,15 +1,15 @@
 # Rule catalog
 
 Generated from the running rule registry, so this file cannot drift from the code.
-Total: **39 rules**, **12 recipes**.
+Total: **42 rules**, **13 recipes**.
 
 ## Distribution by category
 
 | Category | Rules |
 | --- | --- |
 | JS_API | 4 |
-| DOM_API | 9 |
-| BROWSER_BEHAVIOR | 6 |
+| DOM_API | 11 |
+| BROWSER_BEHAVIOR | 7 |
 | ACTIVEX_VBSCRIPT | 4 |
 | HTML_COMPAT | 5 |
 | CSS_COMPAT | 6 |
@@ -45,6 +45,9 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-JS-015 | Conditional compilation (@cc_on) | javascript | ACTIVEX_VBSCRIPT | HIGH | UNSUPPORTED | — | jscript, blocker |
 | WL-JS-016 | window.navigate | javascript | BROWSER_BEHAVIOR | MEDIUM | CONDITIONAL | RCP-NAVIGATE | navigation, removed-api |
 | WL-DOM-002 | element.currentStyle | javascript | DOM_API | MEDIUM | MANUAL | — | computed-style, ie-only-api |
+| WL-DOM-003 | styleSheet.rules | javascript | DOM_API | MEDIUM | CONDITIONAL | RCP-CSSRULES | stylesheet, ie-only-api |
+| WL-DOM-004 | document.execCommand | javascript | DOM_API | LOW | MANUAL | — | deprecated, editing |
+| WL-BEH-002 | navigator.appName IE check | javascript | BROWSER_BEHAVIOR | MEDIUM | MANUAL | — | ua-sniffing, behavior |
 | WL-DOM-001 | element.fireEvent | javascript | DOM_API | HIGH | CONDITIONAL | RCP-FIREEVENT | event, ie-only-api |
 | WL-BEH-001 | IE user-agent sniffing | javascript | BROWSER_BEHAVIOR | HIGH | MANUAL | — | ua-sniffing, behavior |
 | WL-HTML-001 | IE conditional comment | html | HTML_COMPAT | MEDIUM | MANUAL | — | conditional-comment, ie-only |
@@ -80,6 +83,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-FIREEVENT | fireEvent -> dispatchEvent | CONDITIONAL | WL-DOM-001 | Replaces the IE event dispatch with dispatchEvent(new Event(...)) on the same element. |
 | RCP-EXECSCRIPT | execScript -> indirect eval | CONDITIONAL | WL-JS-014 | Replaces window.execScript(code) with (0, eval)(code), which also evaluates in global scope. |
 | RCP-NAVIGATE | window.navigate -> location.assign | CONDITIONAL | WL-JS-016 | Replaces the IE navigation call with location.assign on the same argument. |
+| RCP-CSSRULES | styleSheet.rules -> cssRules | CONDITIONAL | WL-DOM-003 | Renames the property access on a stylesheet object. |
 | RCP-SCRIPT-LANGUAGE | Remove obsolete script language attribute | SAFE | WL-HTML-003 | Deletes language="JavaScript" from the <script> tag; Chrome infers the type anyway. |
 | RCP-DROP-UA-COMPATIBLE | Remove X-UA-Compatible document mode | SAFE | WL-HTML-008 | Deletes the IE document-mode <meta> tag, which Chrome ignores. |
 | RCP-DROP-CSS-HACK | Drop IE CSS hack declaration | SAFE | WL-CSS-005 | Deletes the star/underscore declaration or the \9 value hack. |

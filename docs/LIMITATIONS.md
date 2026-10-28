@@ -7,7 +7,7 @@ what it means for a real migration, and the smallest honest workaround.
 
 ## Analysis
 
-**Only the implemented pattern set is detected.** 37 rules cover the IE features listed in the
+**Only the implemented pattern set is detected.** 42 rules cover the IE features listed in the
 specification plus a few closely related ones. Anything outside that set is invisible: a legacy
 `document.body.clientHeight` quirk used for layout, `element.currentStyle`, `navigator.appName`
 branches written as comparisons against other IE strings, and so on. A clean scan means "none of
@@ -44,7 +44,7 @@ would swallow 20 findings is visible as such. That count is computed against the
 scan; creating the rule does not retro-apply it, so the visible result still arrives on the next
 scan (the dialog offers a rescan button).
 
-**Eleven recipes, and "manual" covers three different situations.** Shipped recipes:
+**Thirteen recipes, and "manual" covers three different situations.** Shipped recipes:
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
 hack removal, and renaming a `-ms-` property whose value syntax matches the standard one.

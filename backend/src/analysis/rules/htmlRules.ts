@@ -36,6 +36,13 @@ const LEGACY_ELEMENTS: Record<string, LegacyElementSpec> = {
     risk: '<bgsound> is an IE-only element. Chrome never plays the referenced audio, and no error is raised, so the loss is silent.',
     recommendation: 'Remove it, or move to <audio autoplay muted> plus an explicit user-triggered play() call, since modern autoplay policies block unrequested audio.',
   },
+  applet: {
+    severity: 'HIGH',
+    risk:
+      'Chrome removed support for <applet>: the Java plugin runtime does not exist, so the element renders as nothing and any API it exposed (live data, printing, signature pads) is gone. Unlike a deprecated API this cannot be polyfilled in the browser.',
+    recommendation:
+      'This is a capability decision, not a markup fix: reimplement the feature in JavaScript (or a server-side service), or retire it. Detect which applets the system actually loads before planning the work.',
+  },
   layer: {
     severity: 'HIGH',
     risk:

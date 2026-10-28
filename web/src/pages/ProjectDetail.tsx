@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, formatDuration, formatTime } from '../api';
+import { api, formatDuration, formatTime, type IgnoreImpact } from '../api';
 import { useAsync } from '../hooks';
 import { useI18n } from '../i18n';
 import { Card, Empty, ErrorBox, Loading, PageHead, Stat } from '../components/ui';
@@ -19,6 +19,28 @@ export default function ProjectDetail() {
   const [reason, setReason] = useState('');
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [savingRule, setSavingRule] = useState(false);
+  const [impact, setImpact] = useState<IgnoreImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+
+  // Preview what the typed rule would silence, before it is saved.
+  useEffect(() => {
+    if (!projectId) return undefined;
+    const trimmedRule = ruleId.trim();
+    const trimmedPath = pathPattern.trim();
+    if (!trimmedRule && !trimmedPath) {
+      setImpact(null);
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setImpactLoading(true);
+      api
+        .previewIgnoreRule(projectId, { ruleId: trimmedRule || null, pathPattern: trimmedPath || null })
+        .then(setImpact)
+        .catch(() => setImpact(null))
+        .finally(() => setImpactLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [projectId, ruleId, pathPattern]);
 
   const addIgnoreRule = async (): Promise<void> => {
     if (!projectId || !reason.trim()) return;
@@ -172,6 +194,32 @@ export default function ProjectDetail() {
                 {savingRule ? <span className="spinner" /> : null} {t('project.addIgnoreRule')}
               </button>
             </div>
+            {impactLoading ? (
+              <div className="hint" style={{ marginTop: 6 }}>
+                <span className="spinner" /> {t('ignore.previewCounting')}
+              </div>
+            ) : impact ? (
+              <div className={`callout ${impact.matched === 0 ? 'warn' : ''}`} style={{ marginTop: 10 }}>
+                {impact.matched === 0 ? (
+                  t('ignore.previewNone')
+                ) : (
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    <span className="grow">
+                      {t('ignore.previewResult', {
+                        new: impact.newlyIgnored,
+                        total: impact.matched,
+                        already: impact.alreadyIgnored,
+                      })}
+                    </span>
+                    {impact.byRule.map((entry) => (
+                      <span key={entry.ruleId} className="badge neutral">
+                        {entry.ruleId} ×{entry.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
             <div className="hint" style={{ marginTop: 6 }}>{t('project.ignoreRuleApplies')}</div>
           </div>
 

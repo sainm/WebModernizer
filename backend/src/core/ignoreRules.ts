@@ -52,8 +52,11 @@ export function pathMatches(pattern: string | null, filePath: string): boolean {
   return compiled(pattern).test(filePath);
 }
 
+/** Everything matching needs from a rule; keeps the counter independent of persistence fields. */
+export type IgnoreRuleScope = Pick<IgnoreRule, 'ruleId' | 'pathPattern' | 'enabled'>;
+
 export interface IgnoreMatch {
-  rule: IgnoreRule;
+  rule: IgnoreRuleScope;
   reason: string;
 }
 
@@ -63,20 +66,62 @@ export interface IgnoreMatch {
  */
 export function findIgnoreMatch(
   finding: Pick<AnalysisFinding, 'ruleId' | 'filePath'>,
-  rules: IgnoreRule[],
+  rules: Array<IgnoreRuleScope & { reason?: string }>,
 ): IgnoreMatch | null {
   for (const rule of rules) {
     if (!rule.enabled) continue;
     if (rule.ruleId && rule.ruleId !== finding.ruleId) continue;
     if (!pathMatches(rule.pathPattern, finding.filePath)) continue;
-    return { rule, reason: rule.reason };
+    return { rule, reason: rule.reason ?? '' };
   }
   return null;
 }
 
 /** Human-readable form used in the finding status note and in reports. */
-export function describeIgnoreRule(rule: IgnoreRule): string {
+export function describeIgnoreRule(rule: IgnoreRuleScope): string {
   const target = rule.ruleId ?? 'any rule';
   const scope = rule.pathPattern ?? 'any file';
   return `${target} · ${scope}`;
+}
+
+export interface IgnoreImpact {
+  /** Findings the rule would silence. */
+  matched: number;
+  /** Subset that is already IGNORED, so the rule changes nothing for them. */
+  alreadyIgnored: number;
+  /** New IGNORED findings the rule would add on the next scan. */
+  newlyIgnored: number;
+  /** Per-rule breakdown, biggest first — shows when a path-only rule is too broad. */
+  byRule: Array<{ ruleId: string; count: number }>;
+}
+
+/**
+ * Answers "how much would this rule silence?" against an existing scan, so the decision
+ * to ignore is made with numbers instead of after the fact.
+ */
+export function countIgnoreMatches(
+  findings: Array<Pick<AnalysisFinding, 'ruleId' | 'filePath' | 'status'>>,
+  candidate: IgnoreRuleScope,
+): IgnoreImpact {
+  const counts = new Map<string, number>();
+  let matched = 0;
+  let alreadyIgnored = 0;
+
+  for (const finding of findings) {
+    const hit = findIgnoreMatch(finding, [candidate]);
+    if (!hit) continue;
+    matched += 1;
+    if (finding.status === 'IGNORED') alreadyIgnored += 1;
+    counts.set(finding.ruleId, (counts.get(finding.ruleId) ?? 0) + 1);
+  }
+
+  return {
+    matched,
+    alreadyIgnored,
+    newlyIgnored: matched - alreadyIgnored,
+    byRule: [...counts.entries()]
+      .map(([ruleId, count]) => ({ ruleId, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5),
+  };
 }

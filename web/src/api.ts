@@ -294,6 +294,14 @@ export interface IgnoreRule {
   createdAt: string;
 }
 
+export interface IgnoreImpact {
+  scanTaskId: string | null;
+  matched: number;
+  alreadyIgnored: number;
+  newlyIgnored: number;
+  byRule: Array<{ ruleId: string; count: number }>;
+}
+
 export interface ScanFile {
   id: string;
   scanTaskId: string;
@@ -357,6 +365,8 @@ export const api = {
   listIgnoreRules: (projectId: string) => request<{ items: IgnoreRule[] }>(`/projects/${projectId}/ignore-rules`),
   createIgnoreRule: (projectId: string, body: { ruleId?: string | null; pathPattern?: string | null; reason: string }) =>
     request<IgnoreRule>(`/projects/${projectId}/ignore-rules`, { method: 'POST', body: JSON.stringify(body) }),
+  previewIgnoreRule: (projectId: string, body: { ruleId?: string | null; pathPattern?: string | null; scanTaskId?: string }) =>
+    request<IgnoreImpact>(`/projects/${projectId}/ignore-rules/preview`, { method: 'POST', body: JSON.stringify(body) }),
   setIgnoreRuleEnabled: (id: string, enabled: boolean) =>
     request<{ id: string; enabled: boolean }>(`/ignore-rules/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
   deleteIgnoreRule: (id: string) => request<{ deleted: boolean }>(`/ignore-rules/${id}`, { method: 'DELETE' }),

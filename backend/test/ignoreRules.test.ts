@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
-import { findIgnoreMatch, globToRegExp, pathMatches } from '../src/core/ignoreRules.js';
+import { countIgnoreMatches, findIgnoreMatch, globToRegExp, pathMatches } from '../src/core/ignoreRules.js';
 import { buildSummary } from '../src/core/report.js';
 import { Store } from '../src/storage/store.js';
 import type { IgnoreRule, ScanStatus } from '../src/model/types.js';
@@ -145,5 +145,42 @@ describe('ignore rules at scan time', () => {
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0].applicable).toBe(false);
     expect(plan.items[0].blockedReasons.join(' ')).toMatch(/ignored by a project rule/);
+  });
+});
+
+describe('ignore rule impact preview', () => {
+  const findings = [
+    { ruleId: 'WL-CSS-004', filePath: 'css/main.css', status: 'DETECTED' as const },
+    { ruleId: 'WL-CSS-004', filePath: 'css/ie-fixes.css', status: 'DETECTED' as const },
+    { ruleId: 'WL-CSS-004', filePath: 'css/ie-fixes.css', status: 'IGNORED' as const },
+    { ruleId: 'WL-CSS-005', filePath: 'css/main.css', status: 'DETECTED' as const },
+    { ruleId: 'WL-JS-001', filePath: 'js/legacy.js', status: 'DETECTED' as const },
+  ];
+
+  it('counts matched, already ignored and newly ignored separately', () => {
+    const impact = countIgnoreMatches(findings, { ruleId: 'WL-CSS-004', pathPattern: 'css/**', enabled: true });
+    expect(impact.matched).toBe(3);
+    expect(impact.alreadyIgnored).toBe(1);
+    expect(impact.newlyIgnored).toBe(2);
+    expect(impact.byRule).toEqual([{ ruleId: 'WL-CSS-004', count: 3 }]);
+  });
+
+  it('breaks the impact down by rule, biggest first', () => {
+    const impact = countIgnoreMatches(findings, { ruleId: null, pathPattern: 'css/**', enabled: true });
+    expect(impact.matched).toBe(4);
+    expect(impact.byRule[0]).toEqual({ ruleId: 'WL-CSS-004', count: 3 });
+    expect(impact.byRule[1]).toEqual({ ruleId: 'WL-CSS-005', count: 1 });
+  });
+
+  it('reports zero when nothing matches, instead of pretending', () => {
+    const impact = countIgnoreMatches(findings, { ruleId: 'WL-HTML-001', pathPattern: null, enabled: true });
+    expect(impact.matched).toBe(0);
+    expect(impact.newlyIgnored).toBe(0);
+    expect(impact.byRule).toEqual([]);
+  });
+
+  it('handles an empty scan', () => {
+    const impact = countIgnoreMatches([], { ruleId: null, pathPattern: null, enabled: true });
+    expect(impact.matched).toBe(0);
   });
 });

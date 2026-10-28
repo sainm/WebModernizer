@@ -306,3 +306,33 @@ Measured on the fixture with one rule (`WL-CSS-004` · `css/**`):
 Creating a rule without a reason returns 400; an unknown rule id returns 400; a pattern with a
 leading `/` or `..` returns 400. The suite gained 10 cases in `backend/test/ignoreRules.test.ts`
 (glob semantics, precedence, disabled rules, and the scan-time integration).
+
+---
+
+## 9. Fifth increment — ignore-rule impact preview
+
+Deciding to ignore a pattern without knowing how much it silences is a guess, so both ignore
+forms now ask the backend first: `POST /api/projects/:id/ignore-rules/preview`.
+
+The counting is a pure function (`countIgnoreMatches`) over the findings of one scan, using the
+same matcher the scanner uses — so the number shown cannot drift from what the next scan will do.
+It reports three numbers instead of one, because "12 matched" is misleading when 9 of them are
+already silenced:
+
+- `matched` — everything the rule covers;
+- `alreadyIgnored` — the subset that is already IGNORED;
+- `newlyIgnored` — what actually changes;
+- `byRule` — top five rules, so a path-only rule that swallows unrelated rules is obvious.
+
+Measured on a project that already ignores `WL-CSS-004` under `css/**`:
+
+| Candidate rule | matched | newly | already | reading |
+| --- | --- | --- | --- | --- |
+| `WL-CSS-005` · `css/**` | 5 | 5 | 0 | new decision, real effect |
+| `WL-CSS-004` · `css/**` | 5 | 0 | 5 | redundant, already covered |
+| *(any rule)* · `css/**` | 20 | 15 | 5 | far too broad: five different rules |
+| `WL-NOPE-999` | — | — | — | 400 `unknown rule` |
+
+The dialog debounces the call by 300 ms and renders the breakdown as badges; an empty result is
+shown as a warning ("no finding matches this rule") rather than as a silent zero, because a rule
+that matches nothing is almost always a typo in the glob.

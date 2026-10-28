@@ -137,6 +137,10 @@ const en = {
   'project.addIgnoreRule': 'Add rule',
   'project.ignoreRulesEmpty': 'No ignore rules. Every finding is reported.',
   'project.ignoreRuleAny': 'any',
+  'ignore.previewCounting': 'Counting affected findings…',
+  'ignore.previewNone': 'No finding in the current scan matches this rule.',
+  'ignore.previewResult': 'Would silence {new} new finding(s) — {total} matched, {already} already ignored.',
+  'ignore.previewFailed': 'Could not preview the impact.',
   'project.ignoreRuleApplies': 'Applies from the next scan; existing results are unchanged.',
 
   'scans.title': 'Scans',
@@ -476,6 +480,10 @@ const zh: Dict = {
   'project.addIgnoreRule': '添加规则',
   'project.ignoreRulesEmpty': '没有忽略规则，所有问题都会上报。',
   'project.ignoreRuleAny': '全部',
+  'ignore.previewCounting': '正在统计受影响的问题…',
+  'ignore.previewNone': '当前扫描中没有匹配这条规则的问题。',
+  'ignore.previewResult': '将新增静音 {new} 条 —— 共匹配 {total} 条，其中 {already} 条已被忽略。',
+  'ignore.previewFailed': '无法预演影响面。',
   'project.ignoreRuleApplies': '从下一次扫描开始生效，已有结果不变。',
 
   'scans.title': '扫描任务',
@@ -812,6 +820,10 @@ const ja: Dict = {
   'project.addIgnoreRule': 'ルールを追加',
   'project.ignoreRulesEmpty': '除外ルールはありません。すべての指摘が報告されます。',
   'project.ignoreRuleAny': 'すべて',
+  'ignore.previewCounting': '影響範囲を集計中…',
+  'ignore.previewNone': '現在のスキャンに一致する指摘はありません。',
+  'ignore.previewResult': '新たに {new} 件を除外します（一致 {total} 件、既に除外 {already} 件）。',
+  'ignore.previewFailed': '影響範囲を取得できませんでした。',
   'project.ignoreRuleApplies': '次回のスキャンから有効です。既存の結果は変わりません。',
 
   'scans.title': 'スキャン',

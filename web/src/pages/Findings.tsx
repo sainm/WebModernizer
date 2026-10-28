@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { api, type Category, type Finding, type FindingStatus, type MigrationLevel, type RuleMeta, type Severity } from '../api';
+import {
+  api,
+  type Category,
+  type Finding,
+  type FindingStatus,
+  type IgnoreImpact,
+  type MigrationLevel,
+  type RuleMeta,
+  type Severity,
+} from '../api';
 import { useAsync, useDebounced, useScanSelection } from '../hooks';
 import { useI18n } from '../i18n';
 import {
@@ -51,6 +60,9 @@ export default function Findings() {
   const [ruleError, setRuleError] = useState<string | null>(null);
   const [ruleSaving, setRuleSaving] = useState(false);
   const [ruleCreated, setRuleCreated] = useState<string | null>(null);
+  const [impact, setImpact] = useState<IgnoreImpact | null>(null);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactError, setImpactError] = useState(false);
   const navigate = useNavigate();
   const { toast, node } = useToast();
 
@@ -130,6 +142,26 @@ export default function Findings() {
       setRuleSaving(false);
     }
   };
+
+  useEffect(() => {
+    const projectId = detail.data?.projectId;
+    if (!ruleOpen || !current || !projectId) return undefined;
+    const timer = setTimeout(() => {
+      setImpactLoading(true);
+      setImpactError(false);
+      api
+        .previewIgnoreRule(projectId, {
+          ruleId: current.ruleId,
+          pathPattern: scopePattern(current.filePath, ruleScope),
+          scanTaskId: current.scanTaskId,
+        })
+        .then(setImpact)
+        .catch(() => setImpactError(true))
+        .finally(() => setImpactLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ruleOpen, ruleScope, current?.id, detail.data?.projectId]);
 
   const activeFilterCount = useMemo(
     () => ['severity', 'level', 'status', 'category', 'rule', 'path'].filter((key) => params.get(key)).length,
@@ -579,6 +611,37 @@ export default function Findings() {
             <div className="hint mono" style={{ marginTop: 6 }}>
               {scopePattern(current.filePath, ruleScope) ?? '*'}
             </div>
+          </div>
+          <div
+            className={`callout ${impactError || (impact && impact.matched === 0) ? 'warn' : ''}`}
+            style={{ marginBottom: 12 }}
+          >
+            {impactLoading ? (
+              <span className="row">
+                <span className="spinner" /> {t('ignore.previewCounting')}
+              </span>
+            ) : impactError ? (
+              t('ignore.previewFailed')
+            ) : !impact ? null : impact.matched === 0 ? (
+              t('ignore.previewNone')
+            ) : (
+              <>
+                <div>
+                  {t('ignore.previewResult', {
+                    new: impact.newlyIgnored,
+                    total: impact.matched,
+                    already: impact.alreadyIgnored,
+                  })}
+                </div>
+                <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
+                  {impact.byRule.map((entry) => (
+                    <span key={entry.ruleId} className="badge neutral">
+                      {entry.ruleId} ×{entry.count}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
           <div className="field">
             <label>{t('findings.ignoreRuleReason')}</label>

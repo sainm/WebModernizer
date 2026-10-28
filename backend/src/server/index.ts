@@ -6,6 +6,7 @@ import { RULES, RULE_MAP, ruleStats } from '../analysis/rules/index.js';
 import { MigrationService } from '../core/migration.js';
 import { ScanManager } from '../core/orchestrator.js';
 import { buildSummary, reportAsCsv, reportAsHtml, reportAsJson, writeScanReport } from '../core/report.js';
+import { countIgnoreMatches } from '../core/ignoreRules.js';
 import { defaultProjectConfig, discoverFiles, isWithinRoot, resolveProjectPath } from '../core/scanner.js';
 import { ValidationService } from '../core/validation.js';
 import { newId, sha256 } from '../model/ids.js';
@@ -243,6 +244,41 @@ export function createServer(store: Store): ServerContext {
       createdBy: 'user',
     });
     res.status(201).json(rule);
+  });
+
+  /**
+   * How many findings of an existing scan would this rule silence?
+   * Used by both the project form and the finding dialog, before anything is saved.
+   */
+  app.post('/api/projects/:id/ignore-rules/preview', (req, res) => {
+    const project = store.getProject(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { ruleId?: string | null; pathPattern?: string | null; scanTaskId?: string };
+    const ruleId = body.ruleId?.trim() || null;
+    if (ruleId && !RULE_MAP.has(ruleId)) {
+      res.status(400).json({ error: `unknown rule: ${ruleId}` });
+      return;
+    }
+    const pathPattern = body.pathPattern?.trim() || null;
+
+    const scans = store.listScans(project.id, 20);
+    const scan = body.scanTaskId
+      ? scans.find((item) => item.id === body.scanTaskId)
+      : (scans.find((item) => item.status === 'COMPLETED') ?? scans[0]);
+    if (!scan) {
+      res.json({ scanTaskId: null, matched: 0, alreadyIgnored: 0, newlyIgnored: 0, byRule: [] });
+      return;
+    }
+
+    const impact = countIgnoreMatches(store.listAllFindings(scan.id), {
+      ruleId,
+      pathPattern,
+      enabled: true,
+    });
+    res.json({ scanTaskId: scan.id, ...impact });
   });
 
   app.patch('/api/ignore-rules/:ruleId', (req, res) => {

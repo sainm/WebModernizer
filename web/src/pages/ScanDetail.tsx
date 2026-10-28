@@ -87,6 +87,24 @@ export default function ScanDetail() {
             <div className={total ? 'progress-fill' : 'progress-fill indeterminate'} style={{ width: total ? `${percent}%` : undefined }} />
           </div>
           <dl className="kv">
+            <dt>{t('scan.mode')}</dt>
+            <dd>
+              {(() => {
+                const all = files.data?.items ?? [];
+                const reused = all.filter((file) => file.reused).length;
+                if (all.length === 0) return <span className="muted">—</span>;
+                return reused > 0 ? (
+                  <span className="row" style={{ gap: 6 }}>
+                    <span className="badge accent">{t('scan.incremental')}</span>
+                    <span className="muted" style={{ fontSize: 11.5 }}>
+                      {t('scan.reusedOf', { reused, total: all.length })}
+                    </span>
+                  </span>
+                ) : (
+                  <span className="badge neutral">{t('scan.fullScan')}</span>
+                );
+              })()}
+            </dd>
             <dt>{t('scan.currentFile')}</dt>
             <dd className="mono" style={{ wordBreak: 'break-all' }}>
               {progress?.currentFile ?? '—'}

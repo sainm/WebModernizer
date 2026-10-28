@@ -389,3 +389,50 @@ Only ~11 % end-to-end, because the same run reads every file: 9.5 s of read+SHA-
 5.4 s of parsing and 0.4 s of analysis. The saving is real CPU work, but it is not the bottleneck
 on this filesystem. A size+mtime shortcut would skip the read and is deliberately not taken —
 reuse must be provable from content, not metadata.
+
+---
+
+## 11. Seventh increment — parallelism, authoring guard, scan visibility
+
+### 11.1 Worker pool: built, measured, off by default
+
+The scanner is per-file I/O plus CPU with no shared state, which looks ideal for a worker pool, so
+one was built (`parseWorker.ts` + `parsePool.ts`): workers do `hash` (read+digest) and `analyze`
+(read, decode, parse, analyse) and return serialisable results; the main thread keeps reuse
+decisions, ignore rules and persistence.
+
+Measured on the 1 440-file project, same machine, cold cache each time:
+
+| Workers | Wall clock | Findings | Notes |
+| --- | --- | --- | --- |
+| 0 (in-process) | 13.2 s | 11 880 | baseline |
+| 2 | 12.7 s | 11 880 | ~4 % better |
+| 4 | 14.3 s | 11 880 | slower |
+| 8 | 14.6 s | 11 880 | slower |
+
+Reading 1 440 small files costs more than parsing them here (9.5 s vs 5.4 s), and the OS already
+overlaps that I/O; workers add IPC plus a structured clone of ~8 findings per file on top. The
+pool therefore ships **disabled by default** (`WEBLIFT_WORKERS` opts in) with the numbers in the
+source comment, rather than as a default that regresses performance.
+
+Robustness that came out of this: the pool is probed with one task before the run, and a failure
+falls back to in-process with a warning instead of failing every file. Vitest runs the TypeScript
+sources, where a worker cannot resolve the compiled module, so the pool is skipped there and the
+in-process path is what the suite covers.
+
+### 11.2 Rule authoring guard
+
+`backend/test/ruleMeta.test.ts` (9 checks) enforces, for every rule: id format `WL-<CAT>-NNN`,
+unique names of 3–60 chars, description ≥ 40 chars, basis ≥ 30 chars, no placeholder text
+(TODO/TBD/N/A), enum fields inside their documented sets, 1–5 well-formed tags, `COVERED` only
+with a fixture, and every `recipeId` pointing at a recipe that actually serves that rule.
+
+It also checks the **output**: for each fixture, `risk` ≥ 80 chars, `recommendation` ≥ 60 chars,
+`message` ≥ 12 chars, and a filled evidence triple. Existing rules passed unchanged, which is the
+point — the guard is for the next rule, not this one.
+
+### 11.3 Incremental visibility
+
+The scan detail now states whether a scan was full or incremental and how many files were reused
+(`12 / 12 个文件复用`), reading the per-file `reused` flag. Without it the speed difference was
+invisible, and "why is this scan different from the last one" had no answer in the UI.

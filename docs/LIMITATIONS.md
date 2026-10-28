@@ -137,6 +137,12 @@ therefore only ~11 %, while the CPU work it removes is ~38 %. A size+mtime fast 
 the read, but the tool trades that speed for the guarantee that a reused finding was computed from
 the exact same bytes.
 
+**Worker threads are available but off by default.** Measured on the 1 440-file project:
+in-process 13.2 s, 2 workers 12.7 s, 4 workers 14.3 s, 8 workers 14.6 s. Per-file I/O plus
+cloning findings back dominates, so extra workers add contention; `WEBLIFT_WORKERS=2` is the only
+setting that helped at all (~4 %). Enable it deliberately on a machine where parsing, not I/O, is
+the bottleneck — it is not a default because it measured slower.
+
 **Performance is single-process and synchronous per file.** The fixture (12 files) scans in ~0.3 s.
 A 5 000-file legacy tree will work but blocks the event loop in bursts; the orchestrator yields
 every 8 files so SSE and cancellation stay responsive. Parallel workers are the obvious next step.

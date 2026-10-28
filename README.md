@@ -58,9 +58,9 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 113 tests: parser, rules, per-rule coverage, message contract, decoding,
-                #            diff, recipes, batching, storage upgrade, visual diff, ignore rules,
-                #            incremental reuse
+npm test        # 122 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+                #            decoding, diff, recipes, batching, storage upgrade, visual diff,
+                #            ignore rules, incremental reuse
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*

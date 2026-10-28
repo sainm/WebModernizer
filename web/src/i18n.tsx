@@ -174,6 +174,10 @@ const en = {
   'scan.export': 'Export report',
   'scan.encoding': 'Encoding',
   'scan.reused': 'reused',
+  'scan.incremental': 'Incremental',
+  'scan.mode': 'Scan mode',
+  'scan.fullScan': 'Full scan',
+  'scan.reusedOf': '{reused} of {total} files reused',
   'scan.size': 'Size',
   'scan.noScan': 'Scan not found',
 
@@ -521,6 +525,10 @@ const zh: Dict = {
   'scan.export': '导出报告',
   'scan.encoding': '编码',
   'scan.reused': '复用',
+  'scan.incremental': '增量',
+  'scan.mode': '扫描方式',
+  'scan.fullScan': '全量',
+  'scan.reusedOf': '{reused} / {total} 个文件复用',
   'scan.size': '大小',
   'scan.noScan': '未找到扫描任务',
 
@@ -865,6 +873,10 @@ const ja: Dict = {
   'scan.export': 'レポート出力',
   'scan.encoding': 'エンコーディング',
   'scan.reused': '再利用',
+  'scan.incremental': '増分',
+  'scan.mode': 'スキャン方式',
+  'scan.fullScan': '全量',
+  'scan.reusedOf': '{total} 件中 {reused} 件を再利用',
   'scan.size': 'サイズ',
   'scan.noScan': 'スキャンが見つかりません',
 

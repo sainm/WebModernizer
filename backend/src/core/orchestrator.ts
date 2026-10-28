@@ -5,14 +5,15 @@ import { analyzeParsedFile } from '../analysis/engine.js';
 import { buildRelations, extractRefFacts, type FileRefFacts } from '../analysis/projectReferences.js';
 import { RECIPE_RULE_IDS, ruleSignature } from '../recipes/registry.js';
 import { sha256, newId, nowIso } from '../model/ids.js';
-import type { AnalysisFinding, ParseProblem, ScanPhase, ScanStatus, SourceFile } from '../model/types.js';
+import type { AnalysisFinding, ParseProblem, ProjectConfig, ScanPhase, ScanStatus, ScanTask, SourceFile } from '../model/types.js';
 import { SCAN_PHASES } from '../model/types.js';
 import { makeSourceFile, parseSourceFile } from '../parser/index.js';
 import type { Store, ScanFileRow } from '../storage/store.js';
 import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js';
 import { decodeBuffer } from './textDecode.js';
 import { writeScanReport } from './report.js';
-import { findIgnoreMatch, ignoreNote } from './ignoreRules.js';
+import { IGNORE_NOTE_PREFIX, findIgnoreMatch, ignoreNote } from './ignoreRules.js';
+import { createParsePool, poolSizeFromEnv, type ParsePool } from './parsePool.js';
 
 export interface ScanEvent {
   scanId: string;
@@ -31,6 +32,87 @@ export interface ScanEvent {
     currentFile: string | null;
   };
   error?: string;
+}
+
+interface PreparedFile {
+  entry: DiscoveryResult['files'][number];
+  hash: string;
+  encoding: string;
+  language: ScanFileRow['language'];
+  status: ScanFileRow['parseStatus'];
+  findings: AnalysisFinding[];
+  problems: ParseProblem[];
+  facts: FileRefFacts | null;
+  reused: boolean;
+}
+
+interface WorkerAnalyzeReply {
+  ok: boolean;
+  error?: string;
+  hash?: string;
+  encoding?: string;
+  language?: ScanFileRow['language'];
+  replacementCount?: number;
+  decodeSource?: string;
+  parsedOk?: boolean;
+  problems?: ParseProblem[];
+  findings?: AnalysisFinding[];
+  facts?: FileRefFacts | null;
+}
+
+/** Maps a worker reply to the same shape the in-process path produces. */
+function toPrepared(entry: DiscoveryResult['files'][number], reply: WorkerAnalyzeReply): PreparedFile {
+  if (!reply.ok) {
+    return {
+      entry,
+      hash: reply.hash ?? '',
+      encoding: 'utf-8',
+      language: 'javascript',
+      status: 'FAILED',
+      findings: [],
+      problems: [{ filePath: entry.relPath, phase: 'READ', message: reply.error ?? 'Worker failed', recovered: false }],
+      facts: null,
+      reused: false,
+    };
+  }
+
+  const problems: ParseProblem[] = [];
+  if ((reply.replacementCount ?? 0) > 0) {
+    problems.push({
+      filePath: entry.relPath,
+      phase: 'DECODE',
+      message: `Decoded as ${reply.encoding} with ${reply.replacementCount} replacement characters; some text may be unreadable.`,
+      recovered: true,
+    });
+  }
+  if (reply.decodeSource === 'FALLBACK') {
+    problems.push({
+      filePath: entry.relPath,
+      phase: 'DECODE',
+      message: 'Encoding could not be determined; fell back to UTF-8 with possible data loss.',
+      recovered: true,
+    });
+  }
+  const parsedProblems = reply.problems ?? [];
+  problems.push(...parsedProblems);
+
+  const status: ScanFileRow['parseStatus'] = !reply.parsedOk
+    ? 'FAILED'
+    : parsedProblems.some((problem) => !problem.recovered)
+      ? 'PARTIAL'
+      : 'PARSED';
+
+  return {
+    entry,
+    hash: reply.hash ?? '',
+    encoding: reply.encoding ?? 'utf-8',
+    language: reply.language ?? 'javascript',
+    status,
+    findings: reply.findings ?? [],
+    problems,
+    facts: reply.facts ?? null,
+    reused: false,
+  };
 }
 
 class CancelledError extends Error {
@@ -99,6 +181,206 @@ export class ScanManager {
     runner.log.push(entry);
     if (runner.log.length > MAX_LOG_ENTRIES) runner.log.shift();
     this.emit(runner, { scanId, type: 'log', at: entry.at, level, message, phase });
+  }
+
+  /**
+   * Turns the discovered files into findings, either by reusing the previous scan or by
+   * reading and parsing. With a pool the work runs in worker threads; without one it runs
+   * here. Both paths return the same shape, so the apply phase cannot diverge.
+   */
+  private async prepareFiles(options: {
+    entries: DiscoveryResult['files'];
+    scan: ScanTask;
+    scanTaskId: string;
+    config: ProjectConfig;
+    disabledRuleIds: Set<string>;
+    previous: ScanTask | null;
+    previousFiles: Map<string, ScanFileRow> | null;
+    previousFindings: Map<string, AnalysisFinding[]>;
+    pool: ParsePool | null;
+    runner: Runner;
+    onProgress: (done: number, currentFile: string | null) => void;
+  }): Promise<PreparedFile[]> {
+    const { entries, scan, scanTaskId, config, disabledRuleIds, previous, previousFiles, previousFindings, runner, onProgress } = options;
+    const results: Array<PreparedFile | null> = new Array(entries.length).fill(null);
+
+    // The pool is an optimisation, never a requirement: if workers cannot start in this
+    // environment, the scan continues in-process instead of failing every file.
+    let activePool = options.pool;
+    if (activePool && entries.length > 0) {
+      try {
+        await activePool.run({ op: 'hash', absPath: entries[0].absolutePath });
+      } catch (err) {
+        this.log(runner, scanTaskId, 'warn', 'PARSING', `Worker pool unavailable (${(err as Error).message}); parsing in-process`);
+        await activePool.close().catch(() => undefined);
+        activePool = null;
+      }
+    }
+
+    /* ---- pass 1: hashes, only where a reuse decision is possible ---- */
+    // A different size cannot be the same file, so those go straight to parsing.
+    const hashIndexes: number[] = [];
+    if (previous && previousFiles) {
+      entries.forEach((entry, index) => {
+        const reusable = previousFiles.get(entry.relPath);
+        if (reusable && reusable.size === entry.size) hashIndexes.push(index);
+      });
+    }
+
+    const hashByIndex = new Map<number, string>();
+    if (hashIndexes.length > 0) {
+      this.checkpoint(runner);
+      if (activePool) {
+        const replies = await activePool.map<{ hash: string }>(
+          hashIndexes.map((index) => ({ op: 'hash', absPath: entries[index].absolutePath })),
+        );
+        hashIndexes.forEach((index, position) => hashByIndex.set(index, replies[position].hash));
+      } else {
+        for (const index of hashIndexes) {
+          hashByIndex.set(index, sha256(readFileSync(entries[index].absolutePath)));
+        }
+      }
+    }
+
+    /* ---- pass 2: reuse what matches, queue the rest ---- */
+    const analyzeIndexes: number[] = [];
+    entries.forEach((entry, index) => {
+      const reusable = previous && previousFiles ? previousFiles.get(entry.relPath) : null;
+      const hash = hashByIndex.get(index);
+      if (reusable && hash && reusable.hash === hash) {
+        results[index] = {
+          entry,
+          hash,
+          encoding: reusable.encoding,
+          language: reusable.language,
+          status: reusable.parseStatus === 'SKIPPED' ? 'PARSED' : reusable.parseStatus,
+          findings: (previousFindings.get(entry.relPath) ?? []).map((finding) => ({
+            ...finding,
+            id: newId('fnd'),
+            scanTaskId,
+          })),
+          problems: [],
+          facts: null,
+          reused: true,
+        };
+        return;
+      }
+      analyzeIndexes.push(index);
+    });
+
+    /* ---- pass 3: read + parse + detect ---- */
+    if (analyzeIndexes.length > 0) {
+      this.checkpoint(runner);
+      if (activePool) {
+        const replies = await activePool.map<WorkerAnalyzeReply>(
+          analyzeIndexes.map((index) => ({
+            op: 'analyze',
+            rootPath: scan.rootPath,
+            relPath: entries[index].relPath,
+            absPath: entries[index].absolutePath,
+            scanTaskId,
+            encodingCandidates: config.encodingCandidates,
+            forceEncoding: config.forceEncoding,
+            disabledRuleIds: [...disabledRuleIds],
+          })),
+        );
+        analyzeIndexes.forEach((index, position) => {
+          results[index] = toPrepared(entries[index], replies[position]);
+        });
+        onProgress(entries.length, null);
+      } else {
+        let done = hashIndexes.length;
+        for (const index of analyzeIndexes) {
+          this.checkpoint(runner);
+          results[index] = this.analyzeInProcess(entries[index], scan, scanTaskId, config, disabledRuleIds);
+          done += 1;
+          onProgress(done, entries[index].relPath);
+        }
+      }
+    }
+
+    return results.map((item, index) => {
+      if (item) return item;
+      // Defensive: an entry that produced nothing is reported as unreadable, never dropped.
+      return {
+        entry: entries[index],
+        hash: '',
+        encoding: 'utf-8',
+        language: 'javascript' as const,
+        status: 'FAILED' as const,
+        findings: [],
+        problems: [{ filePath: entries[index].relPath, phase: 'READ' as const, message: 'File was not processed.', recovered: false }],
+        facts: null,
+        reused: false,
+      };
+    });
+  }
+
+  /** Single-file path used when the pool is disabled or unavailable. */
+  private analyzeInProcess(
+    entry: DiscoveryResult['files'][number],
+    scan: ScanTask,
+    scanTaskId: string,
+    config: ProjectConfig,
+    disabledRuleIds: Set<string>,
+  ): PreparedFile {
+    try {
+      const buffer = readFileSync(entry.absolutePath);
+      const hash = sha256(buffer);
+      const decoded = decodeBuffer(buffer, { candidates: config.encodingCandidates, forceEncoding: config.forceEncoding });
+      const problems: ParseProblem[] = [];
+      if (decoded.replacementCount > 0) {
+        problems.push({
+          filePath: entry.relPath,
+          phase: 'DECODE',
+          message: `Decoded as ${decoded.encoding} with ${decoded.replacementCount} replacement characters; some text may be unreadable.`,
+          recovered: true,
+        });
+      }
+      if (decoded.source === 'FALLBACK') {
+        problems.push({
+          filePath: entry.relPath,
+          phase: 'DECODE',
+          message: 'Encoding could not be determined; fell back to UTF-8 with possible data loss.',
+          recovered: true,
+        });
+      }
+
+      const sourceFile = makeSourceFile(scan.rootPath, entry.relPath, entry.absolutePath, decoded.text);
+      const parsed = parseSourceFile(sourceFile);
+      problems.push(...parsed.problems);
+      const status: ScanFileRow['parseStatus'] = !parsed.parsed
+        ? 'FAILED'
+        : parsed.problems.some((problem) => !problem.recovered)
+          ? 'PARTIAL'
+          : 'PARSED';
+      const findings = parsed.parsed
+        ? analyzeParsedFile(parsed, { scanTaskId, disabledRuleIds, recipeRuleIds: RECIPE_RULE_IDS })
+        : [];
+      return {
+        entry,
+        hash,
+        encoding: decoded.encoding,
+        language: sourceFile.language,
+        status,
+        findings,
+        problems,
+        facts: parsed.parsed ? extractRefFacts(parsed) : null,
+        reused: false,
+      };
+    } catch (err) {
+      return {
+        entry,
+        hash: '',
+        encoding: 'utf-8',
+        language: 'javascript',
+        status: 'FAILED',
+        findings: [],
+        problems: [{ filePath: entry.relPath, phase: 'READ', message: `Cannot read file: ${(err as Error).message}`, recovered: false }],
+        facts: null,
+        reused: false,
+      };
+    }
   }
 
   private checkpoint(runner: Runner): void {
@@ -175,6 +457,7 @@ export class ScanManager {
       /* ---------------- phase 1: discovery ---------------- */
       this.log(runner, scanId, 'info', 'FILE_DISCOVERY', `Scanning ${task.rootPath}`);
       discovery = discoverFiles(task.rootPath, config);
+      const discoveredFiles = discovery.files;
       for (const warning of discovery.warnings) {
         this.log(runner, scanId, 'warn', 'FILE_DISCOVERY', warning);
       }
@@ -197,9 +480,8 @@ export class ScanManager {
           .join(', ') || 'none'})`,
       );
 
-      /* ---------------- phases 3-5: parse + detect ---------------- */
+      /* ---------------- phases 3-5: prepare (read + parse + detect) ---------------- */
       setPhase('PARSING');
-      let sinceYield = 0;
 
       // Incremental scan: an unchanged file whose rules have not changed either can reuse
       // the previous results. The rule signature guards against reusing findings that a
@@ -212,7 +494,7 @@ export class ScanManager {
             candidate.id !== scanId &&
             candidate.ruleSignature === signature &&
             (candidate.status === 'COMPLETED' || candidate.status === 'COMPLETED_WITH_WARNINGS'),
-        );
+        ) ?? null;
       const previousFiles = previous ? new Map(this.store.listScanFiles(previous.id).map((file) => [file.path, file])) : null;
       // One query for the whole previous scan instead of one per file: on a 1 400-file
       // project that turns 1 400 round trips into a single read.
@@ -223,135 +505,74 @@ export class ScanManager {
           list.push(finding);
           previousFindings.set(finding.filePath, list);
         }
-      }
-      const reusedPaths = new Set<string>();
-      if (previous) {
         this.log(runner, scanId, 'info', 'PARSING', `Incremental: comparing against scan ${previous.id}`);
       }
-      for (const entry of discovery.files) {
-        this.checkpoint(runner);
-        scannedCount += 1;
 
-        let sourceFile: SourceFile | null = null;
-        let parseProblems: ParseProblem[] = [];
-        let fileFindings: AnalysisFinding[] = [];
-        let encoding = 'utf-8';
-        let rawHash = '';
-        let status: ScanFileRow['parseStatus'] = 'PARSED';
+      const pool = createParsePool();
+      if (pool) this.log(runner, scanId, 'info', 'PARSING', `Parsing with ${poolSizeFromEnv()} worker(s)`);
+      let prepared: PreparedFile[];
+      try {
+        prepared = await this.prepareFiles({
+          entries: discoveredFiles,
+          scan: task,
+          scanTaskId: scanId,
+          config,
+          disabledRuleIds: disabledRules,
+          previous,
+          previousFiles,
+          previousFindings,
+          pool,
+          runner,
+          onProgress: (done: number, currentFile: string | null) => {
+            scannedCount = done;
+            if (done % 20 === 0 || done === discoveredFiles.length) emitProgress(currentFile);
+          },
+        });
+      } finally {
+        await pool?.close();
+      }
+      this.checkpoint(runner);
 
-        try {
-          const buffer = readFileSync(entry.absolutePath);
-          rawHash = sha256(buffer);
-
-          const reusable = previousFiles?.get(entry.relPath);
-          if (previous && reusable && reusable.hash === rawHash) {
-            // Same bytes, same rules: copy the findings instead of parsing again.
-            reusedPaths.add(entry.relPath);
-            encoding = reusable.encoding;
-            status = reusable.parseStatus === 'SKIPPED' ? 'PARSED' : reusable.parseStatus;
-            fileFindings = (previousFindings.get(entry.relPath) ?? []).map((finding) => ({
-              ...finding,
-              id: newId('fnd'),
-              scanTaskId: scanId,
-            }));
-            for (const finding of fileFindings) {
-              const match = findIgnoreMatch(finding, ignoreRules);
-              if (!match) {
-                // A rule may have been added since; drop the stale rule note.
-                if (finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith('Ignored by project rule')) {
-                  finding.status = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL' ? 'READY_FOR_MIGRATION' : 'DETECTED';
-                  finding.statusNote = undefined;
-                }
-                continue;
-              }
-              finding.status = 'IGNORED';
-              finding.statusNote = ignoreNote(match.rule, match.reason);
-            }
-            sourceFile = null;
-          } else {
-          const decoded = decodeBuffer(buffer, {
-            candidates: config.encodingCandidates,
-            forceEncoding: config.forceEncoding,
-          });
-          encoding = decoded.encoding;
-          if (decoded.replacementCount > 0) {
-            problems.push({
-              filePath: entry.relPath,
-              phase: 'DECODE',
-              message: `Decoded as ${encoding} with ${decoded.replacementCount} replacement characters; some text may be unreadable.`,
-              recovered: true,
-            });
-          }
-          if (decoded.source === 'FALLBACK') {
-            problems.push({
-              filePath: entry.relPath,
-              phase: 'DECODE',
-              message: 'Encoding could not be determined; fell back to UTF-8 with possible data loss.',
-              recovered: true,
-            });
-          }
-
-          sourceFile = makeSourceFile(task.rootPath, entry.relPath, entry.absolutePath, decoded.text);
-          const parsed = parseSourceFile(sourceFile);
-          parseProblems = parsed.problems;
-          if (!parsed.parsed) status = 'FAILED';
-          else if (parseProblems.some((p) => !p.recovered)) status = 'PARTIAL';
-
-          if (parsed.parsed) {
-            fileFindings = analyzeParsedFile(parsed, {
-              scanTaskId: scanId,
-              disabledRuleIds: disabledRules,
-              recipeRuleIds: RECIPE_RULE_IDS,
-            });
-            for (const finding of fileFindings) {
-              const match = findIgnoreMatch(finding, ignoreRules);
-              if (!match) continue;
-              finding.status = 'IGNORED';
-              finding.statusNote = ignoreNote(match.rule, match.reason);
-              finding.statusUpdatedAt = nowIso();
-              ignoredCount += 1;
-            }
-            facts.push(extractRefFacts(parsed));
-          }
-          }
-        } catch (err) {
-          status = 'FAILED';
-          parseProblems.push({
-            filePath: entry.relPath,
-            phase: 'READ',
-            message: `Cannot read file: ${(err as Error).message}`,
-            recovered: false,
-          });
-        }
-
-        if (status === 'FAILED') failedCount += 1;
+      /* ---------------- apply: reuse notes, ignore rules, rows ---------------- */
+      const reusedPaths = new Set<string>();
+      for (const item of prepared) {
+        if (item.status === 'FAILED') failedCount += 1;
         else parsedCount += 1;
+        problems.push(...item.problems);
+        if (item.reused) reusedPaths.add(item.entry.relPath);
+        if (item.facts) facts.push(item.facts);
 
-        problems.push(...parseProblems);
+        const fileFindings = item.findings;
+        for (const finding of fileFindings) {
+          const match = findIgnoreMatch(finding, ignoreRules);
+          if (match) {
+            finding.status = 'IGNORED';
+            finding.statusNote = ignoreNote(match.rule, match.reason);
+            finding.statusUpdatedAt = nowIso();
+            ignoredCount += 1;
+            continue;
+          }
+          // A reused finding may carry a rule note from a rule that has since been removed.
+          if (item.reused && finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith(IGNORE_NOTE_PREFIX)) {
+            finding.status = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL'
+              ? 'READY_FOR_MIGRATION'
+              : 'DETECTED';
+            finding.statusNote = undefined;
+          }
+        }
         findings.push(...fileFindings);
         fileRows.push({
           id: newId('fil'),
           scanTaskId: scanId,
-          path: entry.relPath,
-          language: sourceFile?.language ?? 'javascript',
-          size: entry.size,
-          hash: rawHash,
-          encoding,
-          parseStatus: status,
+          path: item.entry.relPath,
+          language: item.language,
+          size: item.entry.size,
+          hash: item.hash,
+          encoding: item.encoding,
+          parseStatus: item.status,
           findingCount: fileFindings.length,
-          reused: reusedPaths.has(entry.relPath),
+          reused: item.reused,
         });
-
-        if (scannedCount % 20 === 0) emitProgress(entry.relPath);
-        else if (scannedCount === discovery.files.length) emitProgress(entry.relPath);
-
-        sinceYield += 1;
-        if (sinceYield >= 8) {
-          sinceYield = 0;
-          // Yield so cancellation and SSE writes are not starved by a long synchronous loop.
-          await new Promise((resolve) => setImmediate(resolve));
-          this.checkpoint(runner);
-        }
       }
 
       /* ---------------- phase 6: references ---------------- */

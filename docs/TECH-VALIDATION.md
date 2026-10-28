@@ -436,3 +436,38 @@ point — the guard is for the next rule, not this one.
 The scan detail now states whether a scan was full or incremental and how many files were reused
 (`12 / 12 个文件复用`), reading the per-file `reused` flag. Without it the speed difference was
 invisible, and "why is this scan different from the last one" had no answer in the UI.
+
+---
+
+## 12. Eighth increment — visual comparison inside the migration
+
+The migration and the visual checker existed as two separate actions. Now `execute()` accepts an
+optional page list and captures each page **twice**: once after the plan is prepared but before
+anything is written, once after the commit. The two PNGs are diffed with the same comparator the
+regression checker uses, and the comparison is written to `validation_run` with scope
+`VISUAL_MIGRATION`, so it survives in history instead of only living in the response.
+
+Design choices worth recording:
+
+- **The capture is a dependency, not an import.** `ExecuteOptions.visual.capture` is supplied by the
+  caller (the HTTP route wires it to Playwright). The migration service stays free of browser
+  code, which is what let the whole flow be tested with synthetic PNGs.
+- **Visual failure is data, not an error.** A page that cannot be captured produces
+  `captured: false` with a reason; the files are already written and validated by other means, so
+  the transaction result stays `ok`.
+- **Changed pages are a warning, not a failure.** `warnings` gains one line, and the run is stored
+  with `passed: false` — visible, but not blocking.
+
+Measured against the running tool as the subject, with a real browser:
+
+| Page | Result |
+| --- | --- |
+| `/findings?lang=zh` (the migration changed finding statuses on screen) | 3.65 % · 42 021 px · warning emitted |
+| `/rules?lang=zh` (content unaffected by the migration) | 0 % · 0 px · no warning |
+
+The first row is the honest interesting case: the diff was real, because the page being compared
+genuinely changed. That is exactly the signal the feature exists to produce — including when the
+"app" is the tool itself.
+
+`execute()` became async for this; the HTTP route and the tests were updated accordingly, and the
+suite grew to 126 tests (4 new: diff reported, unchanged page, capture failure, no pages given).

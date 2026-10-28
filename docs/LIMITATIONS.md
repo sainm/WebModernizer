@@ -95,6 +95,12 @@ is downloaded separately; without it the endpoint answers `available: false` wit
 rather than failing. When present, the load check reports page errors and failed requests for a
 single URL.
 
+**Before/after screenshots need a running app.** The migration compares the page against itself
+captured seconds earlier, which requires the app to be served: a JSP page cannot be rendered from
+the backup copy. Captures happen inside `execute()`, so a slow page delays the write by roughly two
+screenshot times per page (max five pages). A page that fails to capture is reported per page and
+never fails the migration.
+
 **Visual regression is one viewport and one fixed threshold.** A capture is 1280×900 full page,
 compared against one baseline per page key with a per-channel threshold of 12. There is no
 multi-viewport matrix, no region masking (a live clock or ad slot will always differ), and no

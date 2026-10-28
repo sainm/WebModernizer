@@ -74,7 +74,7 @@ describe('multi-file migration transactions', () => {
     const cssBefore = readFileSync(join(h.projectDir, CSS_FILE), 'utf8');
     const jsBefore = readFileSync(join(h.projectDir, JS_FILE), 'utf8');
 
-    const result = h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
+    const result = await h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
     expect(result.ok).toBe(true);
     expect(result.aborted).toBe(false);
     expect(result.executions).toHaveLength(2);
@@ -115,7 +115,7 @@ describe('multi-file migration transactions', () => {
     writeFileSync(jsPath, jsTouched);
     const cssBefore = readFileSync(join(h.projectDir, CSS_FILE), 'utf8');
 
-    const result = h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
+    const result = await h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
     expect(result.ok).toBe(false);
     expect(result.aborted).toBe(true);
     expect(result.executions).toHaveLength(0);
@@ -133,7 +133,7 @@ describe('multi-file migration transactions', () => {
     // WL-JS-003 has no recipe at all: it must be excluded, not abort the transaction.
     const manual = pick(h, 'WL-JS-003', JS_FILE);
 
-    const result = h.service.execute(h.scanId, [cssFinding.id, manual.id]);
+    const result = await h.service.execute(h.scanId, [cssFinding.id, manual.id]);
     expect(result.ok).toBe(true);
     expect(result.executions).toHaveLength(1);
     expect(result.failures.map((failure) => failure.findingId)).toContain(manual.id);
@@ -144,7 +144,7 @@ describe('multi-file migration transactions', () => {
     const h = await setup();
     const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
     const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
-    const result = h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
+    const result = await h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
     expect(result.ok).toBe(true);
 
     const cssPath = join(h.projectDir, CSS_FILE);

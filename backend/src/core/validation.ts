@@ -231,6 +231,22 @@ export class ValidationService {
   }
 
   /**
+   * One screenshot with no baseline involved. Used by the migration flow, which compares
+   * the page against itself captured moments earlier rather than against stored history.
+   */
+  async captureScreenshot(
+    url: string,
+    width = 1280,
+    height = 900,
+    maskSelectors: string[] = [],
+  ): Promise<{ png: Buffer; width: number; height: number } | null> {
+    const capture = await this.capturePage(url, width, height, 20000, maskSelectors);
+    if (!capture.available || !capture.png) return null;
+    const dimensions = pngDimensions(capture.png);
+    return { png: capture.png, width: dimensions.width, height: dimensions.height };
+  }
+
+  /**
    * Captures the same page at several viewports and compares each against its own
    * baseline (`<pageKey>@<viewport>`), so a desktop-only check cannot hide a broken
    * tablet or mobile layout.

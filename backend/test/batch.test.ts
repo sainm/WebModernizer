@@ -50,7 +50,7 @@ describe('batch-scoped migration', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('groups several findings of one file write into a single batch', () => {
+  it('groups several findings of one file write into a single batch', async () => {
     const original = readFileSync(join(projectCopy, targetFile), 'utf8');
     const findings = store
       .listAllFindings(scanId)
@@ -62,7 +62,7 @@ describe('batch-scoped migration', () => {
 
     expect(findings.length).toBe(2);
 
-    const result = service.execute(
+    const result = await service.execute(
       scanId,
       findings.map((finding) => finding.id),
     );
@@ -97,7 +97,7 @@ describe('batch-scoped migration', () => {
     }
   });
 
-  it('refuses to roll back the same batch twice', () => {
+  it('refuses to roll back the same batch twice', async () => {
     const applied = store.listMigrations(scanId).filter((row) => row.executionStatus === 'APPLIED');
     if (applied.length === 0) {
       const findings = store
@@ -105,7 +105,7 @@ describe('batch-scoped migration', () => {
         .filter((finding) => finding.filePath === targetFile && finding.migrationLevel === 'SAFE')
         .slice(0, 1);
       if (findings.length === 0) return;
-      const result = service.execute(scanId, [findings[0].id]);
+      const result = await service.execute(scanId, [findings[0].id]);
       const batchId = result.executions[0].batchId as string;
       expect(service.rollbackBatch(batchId).ok).toBe(true);
       const again = service.rollbackBatch(batchId);
@@ -120,7 +120,7 @@ describe('batch-scoped migration', () => {
     expect(again.reason).toMatch(/Already rolled back/);
   });
 
-  it('reports unknown batches instead of pretending success', () => {
+  it('reports unknown batches instead of pretending success', async () => {
     const result = service.rollbackBatch('bat_does_not_exist');
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('Unknown batch');

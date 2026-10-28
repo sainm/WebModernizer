@@ -49,7 +49,7 @@ describe('end-to-end scan of the legacy example project', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  it('scans every source file in the project', () => {
+  it('scans every source file in the project', async () => {
     const scan = store.getScan(scanId);
     expect(scan?.status).toBe('COMPLETED');
     const files = store.listScanFiles(scanId);
@@ -57,13 +57,13 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(files.every((file) => file.parseStatus === 'PARSED')).toBe(true);
   });
 
-  it('records the real encoding per file', () => {
+  it('records the real encoding per file', async () => {
     const files = store.listScanFiles(scanId);
     const sjis = files.find((file) => file.path === 'js/shift-jis-helper.js');
     expect(sjis?.encoding).toBe('shift_jis');
   });
 
-  it('produces findings with precise locations', () => {
+  it('produces findings with precise locations', async () => {
     const summary = buildSummary(store, scanId);
     expect(summary.totals.findings).toBeGreaterThan(80);
     expect(summary.totals.highRisk).toBeGreaterThan(30);
@@ -79,7 +79,7 @@ describe('end-to-end scan of the legacy example project', () => {
     }
   });
 
-  it('never reports decoy text from comments or string literals', () => {
+  it('never reports decoy text from comments or string literals', async () => {
     const all = store.listAllFindings(scanId);
     const decoys = all.filter((finding) => /attachEvent is deprecated/.test(finding.snippet));
     expect(decoys).toHaveLength(0);
@@ -90,12 +90,12 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(lines[real!.startLine - 1]).toContain('attachEvent');
   });
 
-  it('reports zero findings in the modern JavaScript file', () => {
+  it('reports zero findings in the modern JavaScript file', async () => {
     const all = store.listAllFindings(scanId);
     expect(all.filter((finding) => finding.filePath === 'js/modern.js')).toHaveLength(0);
   });
 
-  it('builds confirmed and unknown file relations', () => {
+  it('builds confirmed and unknown file relations', async () => {
     const relations = store.listRelations(scanId);
     const confirmed = relations.find(
       (rel) => rel.fromPath === 'index.jsp' && rel.toPath === 'js/common.js' && rel.confidence === 'CONFIRMED',
@@ -120,7 +120,7 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(inferred?.confidence).toBe('INFERRED');
   });
 
-  it('previews an event-handler migration without touching the file', () => {
+  it('previews an event-handler migration without touching the file', async () => {
     const before = readFileSync(join(projectCopy, 'js/legacy-events.js'), 'utf8');
     const all = store.listAllFindings(scanId);
     const target = all.find((finding) => finding.filePath === 'js/legacy-events.js' && finding.ruleId === 'WL-JS-001');
@@ -136,13 +136,13 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(readFileSync(join(projectCopy, 'js/legacy-events.js'), 'utf8')).toBe(before);
   });
 
-  it('executes the migration, validates it and rolls it back', () => {
+  it('executes the migration, validates it and rolls it back', async () => {
     const all = store.listAllFindings(scanId);
     const target = all.find((finding) => finding.filePath === 'js/legacy-events.js' && finding.ruleId === 'WL-JS-001')!;
     const original = readFileSync(join(projectCopy, 'js/legacy-events.js'), 'utf8');
     const service = new MigrationService(store);
 
-    const result = service.execute(scanId, [target.id]);
+    const result = await service.execute(scanId, [target.id]);
     expect(result.ok).toBe(true);
     expect(result.executions).toHaveLength(1);
 
@@ -166,7 +166,7 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(store.getMigration(result.executions[0].id)?.executionStatus).toBe('ROLLED_BACK');
   });
 
-  it('refuses to migrate when the file changed after the scan', () => {
+  it('refuses to migrate when the file changed after the scan', async () => {
     const all = store.listAllFindings(scanId);
     const target = all.find((finding) => finding.filePath === 'js/dynamic-loader.js' && finding.ruleId === 'WL-BEH-001');
     const service = new MigrationService(store);

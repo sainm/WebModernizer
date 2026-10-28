@@ -5,6 +5,7 @@ import {
   type Finding,
   type MigrationExecution,
   type MigrationPlan,
+  type MigrationVisualResult,
   type ValidationReport,
   type VisualValidationResult,
 } from '../api';
@@ -42,6 +43,8 @@ export default function Migration() {
   const [visualResults, setVisualResults] = useState<VisualValidationResult[] | null>(null);
   const [maskInput, setMaskInput] = useState('');
   const [viewportNames, setViewportNames] = useState<string[]>(['desktop']);
+  const [compareDuringExecute, setCompareDuringExecute] = useState(false);
+  const [lastVisual, setLastVisual] = useState<MigrationVisualResult[] | null>(null);
   const { toast, node } = useToast();
 
   const automatable = useMemo(
@@ -88,7 +91,21 @@ export default function Migration() {
     if (!window.confirm(t('migration.confirmExecute'))) return;
     setBusy(true);
     try {
-      const result = await api.execute(scanId, [...selected]);
+      const wantedVisual = compareDuringExecute && visualUrl.trim().length > 0;
+      const result = await api.execute(
+        scanId,
+        [...selected],
+        wantedVisual
+          ? {
+              pages: [{ pageKey: visualKey.trim() || 'page', url: visualUrl.trim() }],
+              maskSelectors: maskInput
+                .split(',')
+                .map((selector) => selector.trim())
+                .filter(Boolean),
+            }
+          : undefined,
+      );
+      setLastVisual(result.visual ?? []);
       toast(
         result.aborted
           ? t('migration.aborted')
@@ -284,9 +301,19 @@ export default function Migration() {
             <Card
               title={`${t('migration.diff')} · ${plan.items.filter((item) => item.applicable).length}/${plan.items.length}`}
               actions={
-                <button className="btn primary small" onClick={execute} disabled={busy || !plan.items.some((item) => item.applicable)}>
-                  {t('migration.execute')}
-                </button>
+                <div className="row">
+                  <label className="check" title={visualUrl}>
+                    <input
+                      type="checkbox"
+                      checked={compareDuringExecute}
+                      onChange={(event) => setCompareDuringExecute(event.target.checked)}
+                    />
+                    {t('migration.compareVisual')}
+                  </label>
+                  <button className="btn primary small" onClick={execute} disabled={busy || !plan.items.some((item) => item.applicable)}>
+                    {t('migration.execute')}
+                  </button>
+                </div>
               }
               flush
             >
@@ -345,6 +372,59 @@ export default function Migration() {
         <div style={{ marginTop: 14 }}>
           <Card title={t('migration.executions')} flush>
             <HistoryTable items={history.data.items} onRollback={rollbackTransaction} />
+          </Card>
+        </div>
+      ) : null}
+
+      {lastVisual && lastVisual.length > 0 ? (
+        <div style={{ marginTop: 14 }}>
+          <Card title={t('migration.visualResult')}>
+            {lastVisual.map((result) => (
+              <div key={result.pageKey} style={{ marginBottom: 14 }}>
+                <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+                  <span className="mono" style={{ fontSize: 11 }}>{result.pageKey}</span>
+                  {!result.captured ? (
+                    <span className="badge warn">{t('visual.unavailable')}</span>
+                  ) : result.changedPixels === 0 && !result.dimensionMismatch ? (
+                    <span className="badge ok">{t('visual.unchanged')}</span>
+                  ) : (
+                    <span className="badge high">{t('visual.changed')}</span>
+                  )}
+                  {result.captured ? (
+                    <>
+                      <span className="badge neutral">
+                        {t('visual.diffPercent')}: {result.diffPercent}%
+                      </span>
+                      <span className="mono muted" style={{ fontSize: 11 }}>
+                        {result.changedPixels} / {result.totalPixels} px · {result.width}×{result.height}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="dim" style={{ fontSize: 11.5 }}>{result.reason}</span>
+                  )}
+                </div>
+                {result.captured && result.beforeDataUrl && result.afterDataUrl ? (
+                  <div className="grid-2">
+                    <div>
+                      <div className="section-title">{t('visual.baseline')}</div>
+                      <img
+                        src={result.beforeDataUrl}
+                        alt={t('visual.baseline')}
+                        style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
+                      />
+                    </div>
+                    <div>
+                      <div className="section-title">{t('visual.current')}</div>
+                      <img
+                        src={result.afterDataUrl}
+                        alt={t('visual.current')}
+                        style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 6, background: '#fff' }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ))}
           </Card>
         </div>
       ) : null}

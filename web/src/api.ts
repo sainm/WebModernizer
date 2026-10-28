@@ -252,6 +252,21 @@ export interface VisualValidationResult {
   baselineDataUrl?: string;
 }
 
+export interface MigrationVisualResult {
+  pageKey: string;
+  url: string;
+  captured: boolean;
+  reason?: string;
+  width: number;
+  height: number;
+  diffPercent: number;
+  changedPixels: number;
+  totalPixels: number;
+  dimensionMismatch: boolean;
+  beforeDataUrl?: string;
+  afterDataUrl?: string;
+}
+
 export interface ExecuteResult {
   ok: boolean;
   executions: MigrationExecution[];
@@ -260,6 +275,8 @@ export interface ExecuteResult {
   sessionId: string;
   /** True when the plan was rejected and nothing was written. */
   aborted: boolean;
+  /** Before/after comparison, only when pages were supplied. */
+  visual: MigrationVisualResult[];
 }
 
 export interface ValidationReport {
@@ -423,8 +440,15 @@ export const api = {
 
   preview: (scanTaskId: string, findingIds: string[]) =>
     request<MigrationPlan>('/migrations/preview', { method: 'POST', body: JSON.stringify({ scanTaskId, findingIds }) }),
-  execute: (scanTaskId: string, findingIds: string[]) =>
-    request<ExecuteResult>('/migrations/execute', { method: 'POST', body: JSON.stringify({ scanTaskId, findingIds }) }),
+  execute: (
+    scanTaskId: string,
+    findingIds: string[],
+    visual?: { pages: Array<{ pageKey: string; url: string }>; maskSelectors?: string[] },
+  ) =>
+    request<ExecuteResult>('/migrations/execute', {
+      method: 'POST',
+      body: JSON.stringify({ scanTaskId, findingIds, ...(visual ? { visual } : {}) }),
+    }),
   rollback: (executionId: string) => request<RollbackResult>(`/migrations/${executionId}/rollback`, { method: 'POST' }),
   rollbackBatch: (batchId: string) => request<RollbackResult>(`/migrations/batch/${batchId}/rollback`, { method: 'POST' }),
   rollbackSession: (sessionId: string) => request<RollbackResult>(`/migrations/session/${sessionId}/rollback`, { method: 'POST' }),

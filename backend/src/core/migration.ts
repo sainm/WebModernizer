@@ -5,6 +5,7 @@ import type {
   MigrationExecution,
   MigrationPlan,
   MigrationPlanItem,
+  MigrationVisualResult,
   TextEdit,
 } from '../model/types.js';
 import { newId, nowIso, sha256 } from '../model/ids.js';
@@ -12,12 +13,31 @@ import { parseSourceFile, makeSourceFile } from '../parser/index.js';
 import { recipeForFinding } from '../recipes/registry.js';
 import type { Store } from '../storage/store.js';
 import { applyEdits, diffLines, toUnifiedDiff } from './diff.js';
+import { comparePngs, toDataUrl } from './imageDiff.js';
 import { dataRoot } from './report.js';
 import { resolveProjectPath } from './scanner.js';
 
 export interface PreviewOptions {
   scanTaskId: string;
   findingIds: string[];
+}
+
+export interface VisualPage {
+  pageKey: string;
+  url: string;
+}
+
+export interface VisualCapture {
+  /** Takes one screenshot of the page as it exists right now. */
+  capture(url: string): Promise<{ png: Buffer; width: number; height: number } | null>;
+}
+
+export interface ExecuteOptions {
+  /**
+   * Screenshot the given pages around the write. Capturing happens after the plan is
+   * prepared but before anything is written, so "before" really is the pre-migration page.
+   */
+  visual?: { pages: VisualPage[]; capture: VisualCapture['capture'] };
 }
 
 export interface ExecuteResult {
@@ -29,6 +49,8 @@ export interface ExecuteResult {
   sessionId: string;
   /** True when the plan was rejected and nothing was written. */
   aborted: boolean;
+  /** Before/after comparison, only when the caller asked for it. */
+  visual: MigrationVisualResult[];
 }
 
 /** A file whose edits are computed and verified but not yet on disk. */
@@ -254,7 +276,7 @@ export class MigrationService {
    * part of the plan). Anything that fails during prepare or commit aborts the whole
    * transaction: a multi-file plan either lands completely or not at all.
    */
-  execute(scanTaskId: string, findingIds: string[]): ExecuteResult {
+  async execute(scanTaskId: string, findingIds: string[], options: ExecuteOptions = {}): Promise<ExecuteResult> {
     const scan = this.store.getScan(scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${scanTaskId}`);
 
@@ -345,7 +367,20 @@ export class MigrationService {
     }
 
     if (prepared.length === 0) {
-      return { ok: false, executions: [], failures: skipped, warnings, sessionId, aborted: true };
+      return { ok: false, executions: [], failures: skipped, warnings, sessionId, aborted: true, visual: [] };
+    }
+
+    /* ------------------- optional: capture the pages before writing ------------------- */
+    const visualPages = options.visual?.pages ?? [];
+    const beforeShots = new Map<string, { png: Buffer; width: number; height: number } | null>();
+    if (visualPages.length > 0 && options.visual) {
+      for (const page of visualPages) {
+        try {
+          beforeShots.set(page.pageKey, await options.visual.capture(page.url));
+        } catch {
+          beforeShots.set(page.pageKey, null);
+        }
+      }
     }
 
     /* ---------------------------- phase 2: commit ---------------------------- */
@@ -411,7 +446,9 @@ export class MigrationService {
 
     if (skipped.length > 0) warnings.push(`${skipped.length} finding(s) were excluded before execution; see failures for reasons.`);
 
-    return { ok: true, executions, failures: skipped, warnings, sessionId, aborted: false };
+    const visual = await this.compareAfterMigration(scanTaskId, visualPages, beforeShots, options.visual?.capture, warnings);
+
+    return { ok: true, executions, failures: skipped, warnings, sessionId, aborted: false, visual };
   }
 
   /** Aborts a transaction: nothing has been written, so only the reason is reported. */
@@ -423,6 +460,7 @@ export class MigrationService {
       warnings: [...warnings, 'Nothing was written: the migration is applied per plan, and this plan was rejected.'],
       sessionId,
       aborted: true,
+      visual: [],
     };
   }
 
@@ -435,6 +473,86 @@ export class MigrationService {
     if (rows.length === 0) return { ok: false, reason: 'Unknown session' };
     return this.rollbackRows(rows, sessionId, 'session');
   }
+  /**
+   * Captures the pages again and diffs them against the pre-write screenshots. A visual
+   * failure never fails the migration: the files are already written and validated by
+   * other means, so the result is recorded as data, not as an error.
+   */
+  private async compareAfterMigration(
+    scanTaskId: string,
+    pages: VisualPage[],
+    beforeShots: Map<string, { png: Buffer; width: number; height: number } | null>,
+    capture: VisualCapture['capture'] | undefined,
+    warnings: string[],
+  ): Promise<MigrationVisualResult[]> {
+    if (pages.length === 0 || !capture) return [];
+
+    const results: MigrationVisualResult[] = [];
+    for (const page of pages) {
+      const before = beforeShots.get(page.pageKey) ?? null;
+      if (!before) {
+        results.push({
+          pageKey: page.pageKey,
+          url: page.url,
+          captured: false,
+          reason: 'The page could not be captured before the migration; nothing to compare.',
+          width: 0,
+          height: 0,
+          diffPercent: 0,
+          changedPixels: 0,
+          totalPixels: 0,
+          dimensionMismatch: false,
+        });
+        continue;
+      }
+
+      let after: { png: Buffer; width: number; height: number } | null = null;
+      try {
+        after = await capture(page.url);
+      } catch {
+        after = null;
+      }
+      if (!after) {
+        results.push({
+          pageKey: page.pageKey,
+          url: page.url,
+          captured: false,
+          reason: 'The page could not be captured after the migration (is the app still running?).',
+          width: before.width,
+          height: before.height,
+          diffPercent: 0,
+          changedPixels: 0,
+          totalPixels: 0,
+          dimensionMismatch: false,
+          beforeDataUrl: toDataUrl(before.png),
+        });
+        continue;
+      }
+
+      const diff = comparePngs(before.png, after.png);
+      results.push({
+        pageKey: page.pageKey,
+        url: page.url,
+        captured: true,
+        width: diff.width,
+        height: diff.height,
+        diffPercent: diff.diffPercent,
+        changedPixels: diff.changedPixels,
+        totalPixels: diff.totalPixels,
+        dimensionMismatch: diff.dimensionMismatch,
+        beforeDataUrl: toDataUrl(before.png),
+        afterDataUrl: toDataUrl(after.png),
+      });
+    }
+
+    const changed = results.filter((result) => result.captured && result.changedPixels > 0).length;
+    if (changed > 0) warnings.push(`${changed} page(s) changed visually after the migration; review the before/after images.`);
+
+    // Keep the comparison in history so it is not only visible in this response.
+    this.store.insertValidationRun(scanTaskId, 'VISUAL_MIGRATION', changed === 0, { results: results.map(({ beforeDataUrl, afterDataUrl, ...rest }) => rest) });
+    return results;
+  }
+
   /**
    * Rolling back one row means rolling back what that execute() call did, because a
    * multi-file transaction is restored as a unit. Legacy rows without a session fall

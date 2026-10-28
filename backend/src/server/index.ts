@@ -665,13 +665,30 @@ export function createServer(store: Store): ServerContext {
 
   app.post(
     '/api/migrations/execute',
-    asyncHandler((req, res) => {
-      const body = req.body as { scanTaskId?: string; findingIds?: string[] };
+    asyncHandler(async (req, res) => {
+      const body = req.body as {
+        scanTaskId?: string;
+        findingIds?: string[];
+        visual?: { pages?: Array<{ pageKey?: string; url?: string }>; maskSelectors?: string[] };
+      };
       if (!body.scanTaskId || !Array.isArray(body.findingIds) || body.findingIds.length === 0) {
         res.status(400).json({ error: 'scanTaskId and a non-empty findingIds array are required' });
         return;
       }
-      const result = migrations.execute(body.scanTaskId, body.findingIds);
+
+      // Optional before/after screenshots. Only http(s) pages are accepted, and a page
+      // that fails to capture is reported per page instead of blocking the migration.
+      const pages = (body.visual?.pages ?? [])
+        .filter((page) => typeof page.url === 'string' && /^https?:\/\//i.test(page.url))
+        .slice(0, 5)
+        .map((page, index) => ({ pageKey: page.pageKey?.trim() || `page-${index + 1}`, url: page.url as string }));
+      const maskSelectors = (body.visual?.maskSelectors ?? []).map((selector) => selector.trim()).filter(Boolean);
+
+      const result = await migrations.execute(
+        body.scanTaskId,
+        body.findingIds,
+        pages.length > 0 ? { visual: { pages, capture: (url: string) => validation.captureScreenshot(url, 1280, 900, maskSelectors) } } : {},
+      );
       res.status(result.ok ? 200 : 207).json(result);
     }),
   );

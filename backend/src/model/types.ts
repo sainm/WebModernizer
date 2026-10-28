@@ -383,6 +383,22 @@ export interface IgnoreRule {
   createdAt: string;
 }
 
+/** One page compared across a migration: captured before and after the write. */
+export interface MigrationVisualResult {
+  pageKey: string;
+  url: string;
+  captured: boolean;
+  reason?: string;
+  width: number;
+  height: number;
+  diffPercent: number;
+  changedPixels: number;
+  totalPixels: number;
+  dimensionMismatch: boolean;
+  beforeDataUrl?: string;
+  afterDataUrl?: string;
+}
+
 /** Stored reference screenshot for one page of a project. */
 export interface VisualBaseline {
   id: string;

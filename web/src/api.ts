@@ -320,6 +320,19 @@ export interface IgnoreImpact {
   byRule: Array<{ ruleId: string; count: number }>;
 }
 
+export interface ScanCompare {
+  baseline: { id: string; createdAt: string; findingCount: number };
+  current: { id: string; createdAt: string; findingCount: number };
+  sources: { changedFiles: string[]; removedFiles: string[]; identical: boolean };
+  resolved: Finding[];
+  added: Finding[];
+  unchanged: number;
+  baselineTotal: number;
+  currentTotal: number;
+  byRule: Array<{ ruleId: string; resolved: number; added: number }>;
+  byFile: Array<{ filePath: string; resolved: number; added: number }>;
+}
+
 export interface ScanFile {
   id: string;
   scanTaskId: string;
@@ -432,6 +445,8 @@ export const api = {
     request<Finding>(`/findings/${id}/status`, { method: 'POST', body: JSON.stringify({ status, note }) }),
 
   relations: (scanId: string) => request<{ items: Relation[] }>(`/scans/${scanId}/relations`),
+  compareScans: (scanId: string, baselineId?: string) =>
+    request<ScanCompare>(`/scans/${scanId}/compare${baselineId ? `?baseline=${baselineId}` : ''}`),
 
   rules: () => request<{ items: RuleMeta[]; total: number }>('/rules'),
   rule: (id: string) => request<{ rule: RuleMeta; recipe: RecordedRecipe | null }>(`/rules/${id}`),

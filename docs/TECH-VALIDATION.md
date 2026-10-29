@@ -498,3 +498,36 @@ instead of megabytes. A test asserts `data:image/png;base64` never appears in th
 One layout defect found by looking at the render: the rule column in the findings table wrapped
 `WL-HTML-006` onto three lines because the monospace cell breaks at hyphens. Fixed with
 `white-space: nowrap` on that column only; file paths keep wrapping.
+
+---
+
+## 14. Tenth increment — comparing two scans
+
+A migration is a multi-round process, so the question users actually ask is "what is left?" rather
+than "what exists?". `GET /api/scans/:id/compare` answers it against a baseline (default: the
+previous scan of the same project).
+
+Identity is the hard part. Offsets and line numbers cannot be used: any edit above a finding shifts
+them, and a productive migration would then read as "everything resolved, everything new". The key
+is `ruleId + filePath + whitespace-normalised snippet`:
+
+| Change between scans | Result |
+| --- | --- |
+| The line moved down (edits above it) | unchanged |
+| The line was reformatted | resolved + added (documented limitation) |
+| The migration removed the pattern | resolved |
+| New legacy code was added | added |
+| The same snippet appears 3× then 2× | 1 resolved, not 1 added (multiset, not set) |
+
+That last row is why occurrences are counted per key instead of deduplicated — with a set, "fixed
+one of three" would silently read as "unchanged".
+
+The response also reports whether the sources moved: comparing two scans of unchanged files shows
+difference caused by rule changes, and the UI says so instead of implying the code changed.
+
+Measured end to end on the fixture: baseline 99 findings → migrate three `SAFE` findings →
+rescan → `resolved: 3, added: 0, unchanged: 96, 99 → 96`, two changed files, rule roll-up
+`WL-CSS-005 −3`. The comparison page renders each side as a table with severity, localised
+message and a link back to the finding.
+
+Suite: 142 tests (8 new for the comparator: line shift, reformat, multiplicity, roll-ups).

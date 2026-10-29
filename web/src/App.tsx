@@ -8,6 +8,7 @@ import Projects from './pages/Projects';
 import ProjectDetail from './pages/ProjectDetail';
 import Scans from './pages/Scans';
 import ScanDetail from './pages/ScanDetail';
+import Compare from './pages/Compare';
 import Rules from './pages/Rules';
 import Settings from './pages/Settings';
 import Reports from './pages/Reports';
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/projects/:projectId" element={<ProjectDetail />} />
           <Route path="/scans" element={<Scans />} />
           <Route path="/scans/:scanId" element={<ScanDetail />} />
+          <Route path="/scans/:scanId/compare" element={<Compare />} />
           <Route path="/findings" element={<Findings />} />
           <Route path="/scans/:scanId/findings" element={<Findings />} />
           <Route path="/dependencies" element={<Dependency />} />

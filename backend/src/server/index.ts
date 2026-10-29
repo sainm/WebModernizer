@@ -6,6 +6,7 @@ import { RULES, RULE_MAP, ruleStats } from '../analysis/rules/index.js';
 import { MigrationService } from '../core/migration.js';
 import { ScanManager } from '../core/orchestrator.js';
 import { buildSummary, reportAsCsv, reportAsHtml, reportAsJson, writeScanReport } from '../core/report.js';
+import { compareFindings } from '../core/compare.js';
 import { countIgnoreMatches } from '../core/ignoreRules.js';
 import { applyIgnoreRules } from '../core/ignoreApply.js';
 import { defaultProjectConfig, discoverFiles, isWithinRoot, resolveProjectPath } from '../core/scanner.js';
@@ -483,6 +484,50 @@ export function createServer(store: Store): ServerContext {
       offset: parseIntParam(req.query.offset, 0),
     });
     res.json({ total: result.total, items: result.items.map(withAutomation) });
+  });
+
+  /**
+   * Difference between two scans of the same project: what the migration fixed, what it
+   * introduced, what is untouched. Baseline defaults to the previous scan of the project.
+   */
+  app.get('/api/scans/:id/compare', (req, res) => {
+    const scan = store.getScan(req.params.id);
+    if (!scan) {
+      res.status(404).json({ error: 'scan not found' });
+      return;
+    }
+    const previous = store
+      .listScans(scan.projectId, 50)
+      .filter((candidate) => candidate.id !== scan.id && candidate.createdAt < scan.createdAt)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    const baselineId = typeof req.query.baseline === 'string' ? req.query.baseline : previous[0]?.id;
+    if (!baselineId) {
+      res.status(409).json({ error: 'this is the first scan of the project; nothing to compare against' });
+      return;
+    }
+    const baseline = store.getScan(baselineId);
+    if (!baseline || baseline.projectId !== scan.projectId) {
+      res.status(400).json({ error: 'baseline must be another scan of the same project' });
+      return;
+    }
+
+    const result = compareFindings(store.listAllFindings(baseline.id), store.listAllFindings(scan.id));
+
+    // Whether the sources themselves moved explains most of the difference.
+    const before = new Map(store.listScanFiles(baseline.id).map((file) => [file.path, file.hash]));
+    const after = new Map(store.listScanFiles(scan.id).map((file) => [file.path, file.hash]));
+    const changedFiles = [...after.entries()].filter(([path, hash]) => before.get(path) !== hash).map(([path]) => path);
+    const onlyInBaseline = [...before.keys()].filter((path) => !after.has(path));
+
+    res.json({
+      baseline: { id: baseline.id, createdAt: baseline.createdAt, findingCount: baseline.findingCount },
+      current: { id: scan.id, createdAt: scan.createdAt, findingCount: scan.findingCount },
+      sources: { changedFiles, removedFiles: onlyInBaseline, identical: changedFiles.length === 0 && onlyInBaseline.length === 0 },
+      ...result,
+      resolved: result.resolved.slice(0, 200),
+      added: result.added.slice(0, 200),
+    });
   });
 
   app.get('/api/scans/:id/relations', (req, res) => {

@@ -53,6 +53,9 @@ export default function ScanDetail() {
             <Link className="btn small" to={`/scans/${current.id}/dependencies`}>
               {t('scan.viewDependencies')}
             </Link>
+            <Link className="btn small" to={`/scans/${current.id}/compare`}>
+              {t('compare.withPrevious')}
+            </Link>
             <a className="btn small" href={api.reportUrl(current.id, 'html')} target="_blank" rel="noreferrer">
               {t('scan.export')} · HTML
             </a>

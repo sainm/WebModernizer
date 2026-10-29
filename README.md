@@ -58,7 +58,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 134 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 142 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, diff, recipes, batching, storage upgrade, visual diff,
                 #            ignore rules, incremental reuse
 ```
@@ -84,6 +84,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | Static validation after migration | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
 | Project-level ignore rules (rule + path glob, mandatory reason, impact preview, retro-apply) | done |
+| Scan comparison: fixed / introduced / unchanged against a baseline scan | done |
 | Incremental scans: unchanged files reuse the previous results when the rule set matches | done |
 | Visual regression: screenshot + pixel diff, selector masking, desktop/tablet/mobile matrix | done (optional dependency) |
 | Before/after screenshots captured around a migration, stored with the execution | done (optional dependency) |

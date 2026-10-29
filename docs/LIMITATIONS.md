@@ -92,6 +92,12 @@ migration and every verification run, including the per-page diff percentage and
 count, but the before/after images stay in the UI: a single screenshot is ~150 KB, and base64 in
 the report would multiply that by the number of pages. CSV export remains findings only.
 
+**Scan comparison matches on the snippet, not on the code's identity.** A finding is "the same"
+when rule + file + whitespace-normalised snippet match, so a line that merely moved is correctly
+unchanged while a rewritten line shows up as fixed + introduced. The catch: reformatting a matched
+line makes it look replaced, and a file renamed between scans loses all its matches. Comparison
+also stops at 200 sample rows per side — the counts in the roll-up tables are complete.
+
 **Static validation is rule-level, per file.** It checks that the migrated rule stopped being
 reported for that file and that the file still parses. It cannot prove the feature still works.
 

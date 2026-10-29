@@ -71,6 +71,7 @@ export default function Findings() {
     migrationLevel: params.get('level') ?? undefined,
     status: params.get('status') ?? undefined,
     category: params.get('category') ?? undefined,
+    module: params.get('module') ?? undefined,
     ruleId: params.get('rule') ?? undefined,
     path: params.get('path') ?? undefined,
     sort: (params.get('sort') as (typeof SORTS)[number] | null) ?? 'risk',
@@ -78,10 +79,22 @@ export default function Findings() {
 
   const list = useAsync(
     () => (scanId ? api.findings(scanId, { ...filters, q: debouncedSearch || undefined, limit: 300 }) : Promise.resolve({ total: 0, items: [] })),
-    [scanId, filters.severity, filters.migrationLevel, filters.status, filters.category, filters.ruleId, filters.path, filters.sort, debouncedSearch],
+    [
+      scanId,
+      filters.severity,
+      filters.migrationLevel,
+      filters.status,
+      filters.category,
+      filters.module,
+      filters.ruleId,
+      filters.path,
+      filters.sort,
+      debouncedSearch,
+    ],
   );
 
   const detail = useAsync(() => (selectedId ? api.finding(selectedId) : Promise.resolve(null)), [selectedId]);
+  const scanInfo = useAsync(() => (scanId ? api.getScan(scanId) : Promise.resolve(null)), [scanId]);
   const source = useAsync(() => (selectedId ? api.findingSource(selectedId) : Promise.resolve(null)), [selectedId]);
 
   const items = list.data?.items ?? [];
@@ -169,9 +182,10 @@ export default function Findings() {
   }, [ruleOpen, ruleScope, current?.id, detail.data?.projectId]);
 
   const activeFilterCount = useMemo(
-    () => ['severity', 'level', 'status', 'category', 'rule', 'path'].filter((key) => params.get(key)).length,
+    () => ['severity', 'level', 'status', 'category', 'module', 'rule', 'path'].filter((key) => params.get(key)).length,
     [params],
   );
+  const moduleOptions = scanInfo.data?.configSnapshot.modules ?? [];
 
   const setStatus = async (next: FindingStatus, note?: string): Promise<void> => {
     if (!current) return;
@@ -260,6 +274,20 @@ export default function Findings() {
             ))}
           </select>
         </div>
+
+        {moduleOptions.length > 1 ? (
+          <div className="filter-group">
+            <div className="filter-label">{t('findings.moduleFilter')}</div>
+            <select className="select" value={filters.module ?? ''} onChange={(event) => updateParam('module', event.target.value || undefined)}>
+              <option value="">{t('common.all')}</option>
+              {moduleOptions.map((module) => (
+                <option key={module.name} value={module.name}>
+                  {module.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         <div className="filter-group">
           <div className="filter-label">{t('findings.status')}</div>

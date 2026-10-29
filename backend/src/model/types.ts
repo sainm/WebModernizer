@@ -278,11 +278,15 @@ export interface ScanSummary {
     ignored: number;
   };
   byCategory: Array<{ category: Category; label: string; count: number }>;
+  /** Grouping by the project's configured modules, not by directory guesswork. */
+  byModule: Array<{ module: string; count: number; highRisk: number }>;
   bySeverity: Array<{ severity: Severity; count: number }>;
   byMigrationLevel: Array<{ level: MigrationLevel; count: number }>;
   byStatus: Array<{ status: FindingStatus; count: number }>;
   topFiles: Array<{ filePath: string; count: number; highRisk: number }>;
   topRules: Array<{ ruleId: string; name: string; count: number }>;
+  /** Every rule that fired, uncapped — the rules page uses this to show relevance. */
+  byRule: Array<{ ruleId: string; count: number }>;
   parseProblems: ParseProblem[];
 }
 

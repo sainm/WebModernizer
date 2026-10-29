@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PNG } from 'pngjs';
 import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
-import { reportAsHtml, reportAsJson } from '../src/core/report.js';
+import { buildSummary, reportAsHtml, reportAsJson } from '../src/core/report.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
@@ -125,5 +125,43 @@ describe('report content', () => {
     const json = reportAsJson(store, scanId);
     // Data URLs would balloon the report; the UI links to them instead.
     expect(json).not.toContain('data:image/png;base64');
+  });
+});
+
+describe('module grouping', () => {
+  it('groups findings by the configured modules, not by directory guesswork', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weblift-module-'));
+    const projectDir = join(dir, 'legacy-app');
+    cpSync(exampleRoot, projectDir, { recursive: true });
+    const store = new Store({ dataDir: join(dir, 'data') });
+    harnesses.push({ dir, store });
+
+    const config = defaultProjectConfig();
+    config.modules = [
+      { name: 'styles', path: 'css' },
+      { name: 'scripts', path: 'js' },
+      { name: 'pages', path: '.' },
+    ];
+
+    const scans = new ScanManager(store);
+    const project = store.createProject('Modules', projectDir, config);
+    const scan = store.createScan(project, config);
+    scans.start(scan.id);
+    const started = Date.now();
+    while (Date.now() - started < 30000) {
+      const current = store.getScan(scan.id);
+      if (current && TERMINAL.includes(current.status)) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+
+    const summary = buildSummary(store, scan.id);
+    const byModule = new Map(summary.byModule.map((row) => [row.module, row.count]));
+
+    // CSS files land in `styles`, JS files in `scripts`, everything else in `pages`.
+    expect(byModule.get('styles')).toBeGreaterThan(0);
+    expect(byModule.get('scripts')).toBeGreaterThan(0);
+    expect(byModule.get('pages')).toBeGreaterThan(0);
+    expect(summary.byModule.reduce((total, row) => total + row.count, 0)).toBe(summary.totals.findings);
+    expect(summary.byModule[0].count).toBeGreaterThanOrEqual(summary.byModule[summary.byModule.length - 1].count);
   });
 });

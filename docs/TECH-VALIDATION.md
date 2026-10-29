@@ -564,3 +564,35 @@ history) while making the mismatch impossible to miss.
 
 Limitation worth stating in the UI copy: re-evaluation can only *remove* findings, never add the ones
 a newly enabled rule would produce. That still requires a rescan.
+
+---
+
+## 16. Twelfth increment — module grouping and rule relevance
+
+Two things the data already contained but the UI never used.
+
+### 16.1 Findings by module
+
+`ProjectConfig.modules` existed from the first version and was only shown as a read-only list. The
+summary now reports `byModule` (count + high-risk per module) using `modulePathOf`, the same helper
+the scanner uses, and `/api/scans/:id/findings?module=<name>` translates a module *name* into the
+path prefix the store filters on — the mapping stays on the server.
+
+Measured on the fixture with `样式=css`, `脚本=js`, `页面=.`: 46 + 33 + 20 = 99, matching the total,
+and filtering by `样式` returns exactly the 20 CSS findings each tagged `module: "样式"`.
+
+The dashboard shows the breakdown only when more than one module exists; a single-module project
+would otherwise get a bar list with one full-width bar and no information.
+
+### 16.2 Rule relevance
+
+42 rules listed alphabetically say nothing about which ones matter for *this* project. The rules
+page now loads the newest completed scan's summary and shows a **hits** column (0 rendered as `—`),
+a "only rules with hits" filter, and a sort toggle. The header shows `33 / 42` for the fixture.
+
+`buildSummary` gained an uncapped `byRule` array for this — `topRules` was already there but limited
+to 12 entries, which would have shown "no hits" for rules that fired 1×.
+
+Wording matters here: a 0-hit rule "found nothing in this project", it is not "broken" or
+"unimportant" — the copy says exactly that, because a rule that never fires on one project may be
+the most important one on the next.

@@ -7,17 +7,29 @@ import { Card, Empty, ErrorBox, LevelBadge, Loading, Modal, PageHead, SeverityBa
 export default function Rules() {
   const { t, category, level } = useI18n();
   const rules = useAsync(() => api.rules(), []);
+  const scans = useAsync(() => api.listScans(undefined, 20), []);
+  const latestScan = scans.data?.items.find((scan) => scan.status === 'COMPLETED') ?? scans.data?.items[0] ?? null;
+  const summary = useAsync(() => (latestScan ? api.summary(latestScan.id) : Promise.resolve(null)), [latestScan?.id]);
+  const [onlyFired, setOnlyFired] = useState(false);
+  const [sortByHits, setSortByHits] = useState(false);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [detail, setDetail] = useState<RuleMeta | null>(null);
   const [detailRecipe, setDetailRecipe] = useState<{ id: string; name: string; level: 'SAFE' | 'CONDITIONAL'; summary: string; caveats: string[] } | null>(null);
   const { toast, node } = useToast();
 
+  const hitsByRule = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of summary.data?.byRule ?? []) map.set(row.ruleId, row.count);
+    return map;
+  }, [summary.data]);
+
   const items = useMemo(() => {
     const all = rules.data?.items ?? [];
     const needle = search.trim().toLowerCase();
-    return all.filter((rule) => {
+    const filtered = all.filter((rule) => {
       if (categoryFilter && rule.category !== categoryFilter) return false;
+      if (onlyFired && !(hitsByRule.get(rule.id) ?? 0)) return false;
       if (!needle) return true;
       return (
         rule.id.toLowerCase().includes(needle) ||
@@ -26,7 +38,10 @@ export default function Rules() {
         rule.tags.some((tag) => tag.includes(needle))
       );
     });
-  }, [rules.data, search, categoryFilter]);
+    return sortByHits ? [...filtered].sort((a, b) => (hitsByRule.get(b.id) ?? 0) - (hitsByRule.get(a.id) ?? 0)) : filtered;
+  }, [rules.data, search, categoryFilter, onlyFired, sortByHits, hitsByRule]);
+
+  const firedCount = (rules.data?.items ?? []).filter((rule) => (hitsByRule.get(rule.id) ?? 0) > 0).length;
 
   const toggle = async (rule: RuleMeta): Promise<void> => {
     try {
@@ -57,7 +72,15 @@ export default function Rules() {
         actions={
           <>
             <span className="badge neutral">{items.length}</span>
+            {latestScan ? <span className="hint">{firedCount} / {rules.data?.total ?? 0}</span> : null}
             <input className="input" style={{ width: 240 }} placeholder={t('common.search')} value={search} onChange={(event) => setSearch(event.target.value)} />
+            <label className="check" title={latestScan ? t('rules.hitsHint', { scan: latestScan.id.slice(0, 12) }) : undefined}>
+              <input type="checkbox" checked={onlyFired} onChange={(event) => setOnlyFired(event.target.checked)} />
+              {t('rules.onlyFired')}
+            </label>
+            <button className={`btn small ${sortByHits ? 'primary' : ''}`} onClick={() => setSortByHits((value) => !value)}>
+              {t('rules.sortByHits')}
+            </button>
             <select className="select" style={{ width: 190 }} value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
               <option value="">{t('common.all')}</option>
               {['JS_API', 'DOM_API', 'HTML_COMPAT', 'CSS_COMPAT', 'ACTIVEX_VBSCRIPT', 'BROWSER_BEHAVIOR', 'DYNAMIC_CODE'].map((value) => (
@@ -83,6 +106,7 @@ export default function Rules() {
                 <th>{t('rules.category')}</th>
                 <th>{t('rules.severity')}</th>
                 <th>{t('rules.level')}</th>
+                <th className="num">{t('rules.hits')}</th>
                 <th>{t('rules.tests')}</th>
                 <th>{t('rules.enabled')}</th>
                 <th />
@@ -106,6 +130,13 @@ export default function Rules() {
                   </td>
                   <td>
                     <LevelBadge value={rule.defaultMigrationLevel} />
+                  </td>
+                  <td className="num">
+                    {(hitsByRule.get(rule.id) ?? 0) > 0 ? (
+                      <span className="badge accent">{hitsByRule.get(rule.id)}</span>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                   <td>
                     <span className={`badge ${rule.testStatus === 'COVERED' ? 'ok' : rule.testStatus === 'PARTIAL' ? 'warn' : 'neutral'}`}>

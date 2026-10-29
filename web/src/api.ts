@@ -119,6 +119,8 @@ export interface Finding {
   recipeAvailable?: boolean;
   /** A recipe exists but this particular occurrence fails its preconditions. */
   recipeBlocked?: boolean;
+  /** Project module this file belongs to, derived from the scan configuration. */
+  module?: string;
 }
 
 export interface RuleMeta {
@@ -160,11 +162,13 @@ export interface ScanSummary {
     ignored: number;
   };
   byCategory: Array<{ category: Category; label: string; count: number }>;
+  byModule: Array<{ module: string; count: number; highRisk: number }>;
   bySeverity: Array<{ severity: Severity; count: number }>;
   byMigrationLevel: Array<{ level: MigrationLevel; count: number }>;
   byStatus: Array<{ status: FindingStatus; count: number }>;
   topFiles: Array<{ filePath: string; count: number; highRisk: number }>;
   topRules: Array<{ ruleId: string; name: string; count: number }>;
+  byRule: Array<{ ruleId: string; count: number }>;
   parseProblems: Array<{ filePath: string; phase: string; message: string; line?: number; column?: number; recovered: boolean }>;
 }
 

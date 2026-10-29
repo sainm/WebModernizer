@@ -195,6 +195,18 @@ export default function ScanDetail() {
               <Loading />
             )}
             <div className="splitter" />
+            {(summary.data?.byModule.length ?? 0) > 1 ? (
+              <>
+                <div className="splitter" />
+                <div className="section-title">{t('scan.byModule')}</div>
+                <BarList
+                  items={(summary.data?.byModule ?? []).map((row) => ({ label: row.module, value: row.count, key: row.module }))}
+                  onSelect={(key) => window.location.assign(`/scans/${current.id}/findings?module=${encodeURIComponent(key)}`)}
+                  colorFor={() => 'var(--ok)'}
+                />
+              </>
+            ) : null}
+            <div className="splitter" />
             <div className="section-title">{t('findings.level')}</div>
             {summary.data ? (
               <BarList

@@ -9,7 +9,7 @@ import { buildSummary, reportAsCsv, reportAsHtml, reportAsJson, writeScanReport 
 import { compareFindings } from '../core/compare.js';
 import { countIgnoreMatches } from '../core/ignoreRules.js';
 import { applyIgnoreRules } from '../core/ignoreApply.js';
-import { defaultProjectConfig, discoverFiles, isWithinRoot, resolveProjectPath } from '../core/scanner.js';
+import { defaultProjectConfig, discoverFiles, isWithinRoot, modulePathOf, resolveProjectPath } from '../core/scanner.js';
 import { ValidationService } from '../core/validation.js';
 import { newId, sha256 } from '../model/ids.js';
 import type { Category, FindingStatus, Language, MigrationLevel, ProjectConfig, Severity } from '../model/types.js';
@@ -481,6 +481,12 @@ export function createServer(store: Store): ServerContext {
       res.status(404).json({ error: 'scan not found' });
       return;
     }
+    // `module` is a configured module name; the store filters by path prefix, so the two
+    // are translated here instead of leaking the mapping into the UI.
+    const moduleName = typeof req.query.module === 'string' ? req.query.module : undefined;
+    const moduleConfig = moduleName ? scan.configSnapshot.modules.find((item) => item.name === moduleName) : undefined;
+    const modulePath = moduleConfig && moduleConfig.path !== '.' && moduleConfig.path !== '' ? moduleConfig.path : undefined;
+
     const result = store.listFindings(scan.id, {
       category: req.query.category as Category | undefined,
       severity: req.query.severity as Severity | undefined,
@@ -489,13 +495,19 @@ export function createServer(store: Store): ServerContext {
       ruleId: typeof req.query.ruleId === 'string' ? req.query.ruleId : undefined,
       language: req.query.language as Language | undefined,
       pathContains: typeof req.query.path === 'string' ? req.query.path : undefined,
-      modulePath: typeof req.query.module === 'string' ? req.query.module : undefined,
+      modulePath,
       q: typeof req.query.q === 'string' ? req.query.q : undefined,
       sort: (req.query.sort as 'risk' | 'path' | 'type' | 'priority' | undefined) ?? 'risk',
       limit: parseIntParam(req.query.limit, 200),
       offset: parseIntParam(req.query.offset, 0),
     });
-    res.json({ total: result.total, items: result.items.map(withAutomation) });
+    // The module a finding belongs to is derived from the scan's configured modules,
+    // so the UI can group without re-implementing the path rules.
+    const config = scan.configSnapshot;
+    res.json({
+      total: result.total,
+      items: result.items.map((finding) => ({ ...withAutomation(finding), module: modulePathOf(finding.filePath, config) })),
+    });
   });
 
   /**

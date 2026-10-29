@@ -4,6 +4,7 @@ import type { Category, FindingStatus, MigrationLevel, ScanSummary, Severity } f
 import { CATEGORY_LABELS } from '../model/types.js';
 import type { Store } from '../storage/store.js';
 import { automationStatus } from '../recipes/registry.js';
+import { modulePathOf } from './scanner.js';
 
 export function dataRoot(): string {
   return process.env.WEBLIFT_DATA_DIR ?? resolve(process.cwd(), 'data');
@@ -22,6 +23,8 @@ export function buildSummary(store: Store, scanId: string): ScanSummary {
   const problems = store.listParseProblems(scanId);
   const files = store.listScanFiles(scanId);
 
+  const config = scan?.configSnapshot ?? null;
+  const byModuleMap = new Map<string, { count: number; highRisk: number }>();
   const byCategoryMap = new Map<Category, number>();
   const bySeverityMap = new Map<Severity, number>();
   const byLevelMap = new Map<MigrationLevel, number>();
@@ -35,6 +38,13 @@ export function buildSummary(store: Store, scanId: string): ScanSummary {
     byLevelMap.set(finding.migrationLevel, (byLevelMap.get(finding.migrationLevel) ?? 0) + 1);
     byStatusMap.set(finding.status, (byStatusMap.get(finding.status) ?? 0) + 1);
     byRule.set(finding.ruleId, (byRule.get(finding.ruleId) ?? 0) + 1);
+    if (config) {
+      const moduleName = modulePathOf(finding.filePath, config);
+      const entry = byModuleMap.get(moduleName) ?? { count: 0, highRisk: 0 };
+      entry.count += 1;
+      if (finding.severity === 'HIGH') entry.highRisk += 1;
+      byModuleMap.set(moduleName, entry);
+    }
     const fileEntry = byFile.get(finding.filePath) ?? { count: 0, highRisk: 0 };
     fileEntry.count += 1;
     if (finding.severity === 'HIGH') fileEntry.highRisk += 1;
@@ -81,6 +91,9 @@ export function buildSummary(store: Store, scanId: string): ScanSummary {
       label: CATEGORY_LABELS[category],
       count: byCategoryMap.get(category) ?? 0,
     })),
+    byModule: [...byModuleMap.entries()]
+      .map(([moduleName, value]) => ({ module: moduleName, ...value }))
+      .sort((a, b) => b.count - a.count),
     bySeverity: severities.map((severity) => ({ severity, count: bySeverityMap.get(severity) ?? 0 })),
     byMigrationLevel: levels.map((level) => ({ level, count: byLevelMap.get(level) ?? 0 })),
     byStatus: statuses.map((status) => ({ status, count: byStatusMap.get(status) ?? 0 })),
@@ -92,6 +105,7 @@ export function buildSummary(store: Store, scanId: string): ScanSummary {
       .map(([ruleId, count]) => ({ ruleId, name: ruleId, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 12),
+    byRule: [...byRule.entries()].map(([ruleId, count]) => ({ ruleId, count })).sort((a, b) => b.count - a.count),
     parseProblems: problems.slice(0, 200),
   };
 }

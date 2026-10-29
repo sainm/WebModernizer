@@ -98,6 +98,11 @@ migration and every verification run, including the per-page diff percentage and
 count, but the before/after images stay in the UI: a single screenshot is ~150 KB, and base64 in
 the report would multiply that by the number of pages. CSV export remains findings only.
 
+**Module grouping is path-prefix based.** A finding is attributed to the first configured module
+whose path prefixes the file; a file outside every configured path falls back to the first module,
+which is right when that module is the project root and misleading when it is not. Modules are a
+project setting, so changing them changes the grouping of *future* summaries only.
+
 **Scan comparison matches on the snippet, not on the code's identity.** A finding is "the same"
 when rule + file + whitespace-normalised snippet match, so a line that merely moved is correctly
 unchanged while a rewritten line shows up as fixed + introduced. The catch: reformatting a matched

@@ -16,7 +16,8 @@
     "dev:api": "npm run dev --workspace backend",
     "dev:ui": "npm run dev --workspace web",
     "start": "node backend/dist/server/index.js",
-    "scan:example": "node backend/dist/cli/scan.js --project examples/legacy-app"
+    "scan:example": "node backend/dist/cli/scan.js --project examples/legacy-app",
+    "stress": "node scripts/gen-stress-project.mjs /tmp/weblift-stress 40 && WEBLIFT_DATA_DIR=/tmp/weblift-stress-data node backend/dist/cli/scan.js --project /tmp/weblift-stress"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

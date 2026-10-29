@@ -12,7 +12,7 @@ type Tab = 'dashboard' | 'files' | 'logs';
 
 export default function ScanDetail() {
   const { scanId } = useParams();
-  const { t, severity, scanStatus, level, phase } = useI18n();
+  const { t, severity, scanStatus, level, phase, category } = useI18n();
   const scan = useAsync(() => api.getScan(scanId as string), [scanId]);
   const { scan: liveScan, progress, logs, live } = useScanStream(scanId ?? null, scan.data ?? null);
   const summary = useAsync<ScanSummary>(() => api.summary(scanId as string), [scanId, liveScan?.status]);
@@ -188,7 +188,7 @@ export default function ScanDetail() {
           <Card title={t('findings.category')}>
             {summary.data ? (
               <BarList
-                items={summary.data.byCategory.map((row) => ({ label: row.label, value: row.count, key: row.category }))}
+                items={summary.data.byCategory.map((row) => ({ label: category(row.category), value: row.count, key: row.category }))}
                 onSelect={(key) => window.location.assign(`/scans/${current.id}/findings?category=${key}`)}
               />
             ) : (

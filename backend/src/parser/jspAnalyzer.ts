@@ -138,13 +138,13 @@ export function intersectsRegions(regions: DynamicRegion[], start: number, end: 
 /** Renders a dynamic region as a readable description for evidence display */
 export function describeRegion(region: DynamicRegion): string {
   const map: Record<DynamicRegionKind, string> = {
-    COMMENT: 'JSP 注释',
-    DIRECTIVE: 'JSP 指令',
-    DECLARATION: 'JSP 声明块',
-    EXPRESSION: 'JSP 表达式',
+    COMMENT: 'JSP comment',
+    DIRECTIVE: 'JSP directive',
+    DECLARATION: 'JSP declaration',
+    EXPRESSION: 'JSP expression',
     SCRIPTLET: 'JSP scriptlet',
-    EL: 'EL 表达式',
-    JSP_TAG: 'jsp 标准标签',
+    EL: 'EL expression',
+    JSP_TAG: 'jsp standard tag',
   };
   const oneLine = region.text.replace(/\s+/g, ' ').slice(0, 80);
   return `${map[region.kind]}: ${oneLine}`;

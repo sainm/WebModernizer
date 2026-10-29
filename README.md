@@ -36,6 +36,10 @@ Scan the bundled legacy fixture from the CLI:
 ```bash
 npm run build:api
 node backend/dist/cli/scan.js --project examples/legacy-app --name "Legacy Orders"
+
+# hostile corpus: minified JS, BOM, CRLF, Shift_JIS, 40 JSP modules,
+# 1 200 CSS rules with hacks, malformed HTML
+npm run stress
 ```
 
 Expected on the fixture: **12 files, 99 findings, 44 high risk, 22 auto-convertible (10 safe, 12 conditional),

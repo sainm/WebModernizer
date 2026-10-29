@@ -36,11 +36,11 @@ export type Category =
 export const CATEGORY_LABELS: Record<Category, string> = {
   JS_API: 'JavaScript API',
   DOM_API: 'DOM API',
-  HTML_COMPAT: 'HTML 兼容性',
-  CSS_COMPAT: 'CSS 兼容性',
+  HTML_COMPAT: 'HTML compatibility',
+  CSS_COMPAT: 'CSS compatibility',
   ACTIVEX_VBSCRIPT: 'ActiveX / VBScript',
-  BROWSER_BEHAVIOR: '浏览器行为差异',
-  DYNAMIC_CODE: '动态代码与未知依赖',
+  BROWSER_BEHAVIOR: 'Browser behavior',
+  DYNAMIC_CODE: 'Dynamic code and unknown dependencies',
 };
 
 /** Business risk, tracked independently from migration difficulty. */
@@ -86,14 +86,14 @@ export const SCAN_PHASES = [
 export type ScanPhase = (typeof SCAN_PHASES)[number];
 
 export const SCAN_PHASE_LABELS: Record<ScanPhase, string> = {
-  FILE_DISCOVERY: '文件发现',
-  FILE_CLASSIFICATION: '文件分类',
-  PARSING: '语法解析',
-  IE_DETECTION: 'IE 特征检测',
-  REFERENCE_ANALYSIS: '跨文件引用分析',
-  FINDING_MERGE: '问题归并',
-  PERSISTENCE: '结果保存',
-  REPORT_GENERATION: '报告生成',
+  FILE_DISCOVERY: 'File discovery',
+  FILE_CLASSIFICATION: 'File classification',
+  PARSING: 'Parsing',
+  IE_DETECTION: 'IE feature detection',
+  REFERENCE_ANALYSIS: 'Cross-file references',
+  FINDING_MERGE: 'Findings merge',
+  PERSISTENCE: 'Persistence',
+  REPORT_GENERATION: 'Report generation',
 };
 
 export interface SourceLocation {

@@ -148,7 +148,7 @@ function collectUnits(
         problems.push({
           filePath,
           phase: 'PARSE',
-          message: `JavaScript 解析错误: ${err.message}`,
+          message: `JavaScript parse error: ${err.message}`,
           line: index.positionAt(err.offset).line,
           column: index.positionAt(err.offset).column,
           recovered: err.recovered,
@@ -223,7 +223,7 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
       problems.push({
         filePath: file.path,
         phase: 'PARSE',
-        message: `JavaScript 解析错误: ${err.message}`,
+        message: `JavaScript parse error: ${err.message}`,
         line: pos.line,
         column: pos.column,
         recovered: err.recovered,
@@ -250,13 +250,17 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
     jsUnits.push(...collected.jsUnits);
     cssUnits.push(...collected.cssUnits);
 
-    // parse5 emits a lot of noise; keep only diagnostics that affect structure or location
+    // parse5 emits a lot of noise; keep only diagnostics that affect structure or location.
+    // A .jspf include is a fragment by definition, so "missing doctype" is not a finding
+    // there even though it matters for a full .jsp page (quirks mode).
+    const isFragment = /\.jspf$/i.test(file.path);
     for (const err of html.errors.slice(0, 5)) {
       if (!/missing-doctype|duplicate-attribute|non-void-html-element-start-tag/i.test(err.message)) continue;
+      if (isFragment && /missing-doctype/i.test(err.message)) continue;
       problems.push({
         filePath: file.path,
         phase: 'PARSE',
-        message: `HTML 结构提示: ${err.message}`,
+        message: `HTML structure hint: ${err.message}`,
         line: err.line,
         column: err.column,
         recovered: true,
@@ -270,7 +274,7 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
       problems.push({
         filePath: file.path,
         phase: 'PARSE',
-        message: `CSS 解析错误: ${err.message}`,
+        message: `CSS parse error: ${err.message}`,
         line: pos.line,
         column: pos.column,
         recovered: false,

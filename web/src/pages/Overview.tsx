@@ -12,7 +12,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 };
 
 export default function Overview() {
-  const { t, severity, scanStatus, phase } = useI18n();
+  const { t, severity, scanStatus, phase, category } = useI18n();
   const navigate = useNavigate();
   const projects = useAsync(() => api.listProjects(), []);
   const scans = useAsync(() => api.listScans(undefined, 8), []);
@@ -114,7 +114,7 @@ export default function Overview() {
             <Card title={t('scan.dashboard')}>
               {summary.data ? (
                 <BarList
-                  items={summary.data.byCategory.map((row) => ({ label: row.label, value: row.count, key: row.category }))}
+                  items={summary.data.byCategory.map((row) => ({ label: category(row.category), value: row.count, key: row.category }))}
                   colorFor={() => 'var(--accent)'}
                 />
               ) : (

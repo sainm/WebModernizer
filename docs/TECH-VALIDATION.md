@@ -596,3 +596,34 @@ to 12 entries, which would have shown "no hits" for rules that fired 1×.
 Wording matters here: a 0-hit rule "found nothing in this project", it is not "broken" or
 "unimportant" — the copy says exactly that, because a rule that never fires on one project may be
 the most important one on the next.
+
+---
+
+## 17. Thirteenth increment — a hostile corpus, and what it exposed
+
+Every measurement so far used the 12-file fixture. `scripts/gen-stress-project.mjs` builds a
+deliberately nasty project instead — 92 files across 40 JSP modules, plus the constructs that have
+broken parsers before:
+
+| Construct | Result |
+| --- | --- |
+| 40 JSP pages with scriptlets in attributes, EL inside `style`, server-side values inside `<script>` | 16 findings per page, no parse failures |
+| `.jspf` include fragments | parsed, but produced bogus problems — see below |
+| hand-encoded Shift_JIS file (`0x8E 0xF3 …`) | detected as `shift_jis`, finding at line 3 column 3 |
+| 266-byte minified single-line JS | 4 findings, 0 problems |
+| BOM file, CRLF file, 40-level nested functions | parsed, no problems |
+| 1 200 CSS rules × 4 hacks | 4 801 findings, 0.3 s total for the whole corpus |
+| malformed HTML (unclosed `td`, `p`, stray `<applet>`) | recovered, 3 findings, no hard errors |
+
+Two real defects surfaced, neither of which the fixture could show:
+
+1. **Doctype hints polluted the problem list.** Every `.jspf` include was recorded as
+   `missing-doctype`, so a clean 92-file project reported 44 parse problems. A fragment is not a
+   document: the hint is now skipped for `.jspf` (it still applies to a full `.jsp`, where a missing
+   doctype really does put Chrome into quirks mode). 44 → 4, and the remaining four are genuine.
+2. **Chinese leaked into backend-facing text.** Category labels, scan-phase labels, JSP region
+   labels and three parse-error prefixes were Chinese, so they appeared untranslated in the English
+   HTML report and mixed languages in the UI. The convention is "backend text is English, the UI
+   translates": all of them are English now, and a `\p{Han}` sweep over `backend/src` returns zero
+   matches. The UI stopped using `summary.byCategory[].label` and translates the category key
+   itself, which is what it was already doing everywhere else.

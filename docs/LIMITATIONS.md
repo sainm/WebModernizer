@@ -87,6 +87,11 @@ restore from version control instead of guessing.
 
 ## Validation
 
+**The report summarises comparisons, it does not embed them.** The HTML/JSON report lists every
+migration and every verification run, including the per-page diff percentage and changed pixel
+count, but the before/after images stay in the UI: a single screenshot is ~150 KB, and base64 in
+the report would multiply that by the number of pages. CSV export remains findings only.
+
 **Static validation is rule-level, per file.** It checks that the migrated rule stopped being
 reported for that file and that the file still parses. It cannot prove the feature still works.
 

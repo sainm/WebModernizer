@@ -107,6 +107,9 @@ interface ReportPayload {
   unresolvedRelations: unknown[];
   parseProblems: ReturnType<Store['listParseProblems']>;
   ruleHits: Array<{ ruleId: string; count: number }>;
+  /** What was actually changed, and what the verification said about it. */
+  migrations: ReturnType<Store['listMigrations']>;
+  validations: ReturnType<Store['listValidationRuns']>;
 }
 
 function buildPayload(store: Store, scanId: string): ReportPayload {
@@ -127,6 +130,8 @@ function buildPayload(store: Store, scanId: string): ReportPayload {
     unresolvedRelations: [],
     parseProblems: store.listParseProblems(scanId),
     ruleHits: [...ruleCounts.entries()].map(([ruleId, count]) => ({ ruleId, count })).sort((a, b) => b.count - a.count),
+    migrations: store.listMigrations(scanId, 200),
+    validations: store.listValidationRuns(scanId),
   };
 }
 
@@ -211,7 +216,7 @@ export function reportAsHtml(store: Store, scanId: string): string {
     .map(
       (f) => `<tr>
         <td><span class="sev sev-${escapeHtml(f.severity.toLowerCase())}">${escapeHtml(f.severity)}</span></td>
-        <td class="mono">${escapeHtml(f.ruleId)}</td>
+        <td class="mono" style="white-space: nowrap">${escapeHtml(f.ruleId)}</td>
         <td class="mono">${escapeHtml(f.filePath)}:${f.startLine}:${f.startColumn}</td>
         <td>${escapeHtml(f.message)}</td>
         <td>${escapeHtml(f.migrationLevel)}</td>
@@ -290,6 +295,62 @@ export function reportAsHtml(store: Store, scanId: string): string {
     .slice(0, 40)
     .map((f) => `<li class="mono">${escapeHtml(f.filePath)}:${f.startLine} — ${escapeHtml(f.message)}</li>`)
     .join('') || '<li>None</li>'}</ul>
+
+  <h2>Migrations applied (${payload.migrations.length})</h2>
+  ${
+    payload.migrations.length === 0
+      ? '<p class="note">No migration was applied for this scan.</p>'
+      : `<table>
+    <thead><tr><th>File</th><th>Rule</th><th>Status</th><th>Validation</th><th>Executed</th><th>Session</th></tr></thead>
+    <tbody>${payload.migrations
+      .map(
+        (execution) => `<tr>
+          <td class="mono">${escapeHtml(execution.filePath)}</td>
+          <td class="mono">${escapeHtml(execution.ruleId)}</td>
+          <td>${escapeHtml(execution.executionStatus)}</td>
+          <td>${escapeHtml(execution.validationStatus)}</td>
+          <td>${escapeHtml(execution.executedAt)}</td>
+          <td class="mono">${escapeHtml((execution.sessionId ?? '').slice(0, 12))}</td>
+        </tr>`,
+      )
+      .join('')}</tbody>
+  </table>`
+  }
+
+  <h2>Verification runs (${payload.validations.length})</h2>
+  ${
+    payload.validations.length === 0
+      ? '<p class="note">No verification was run for this scan.</p>'
+      : payload.validations
+          .map((run) => {
+            const visual = (run.payload as { results?: Array<Record<string, unknown>> }).results;
+            const rows = Array.isArray(visual)
+              ? `<table style="margin-top:8px">
+    <thead><tr><th>Page</th><th>URL</th><th>Captured</th><th>Diff</th><th>Changed pixels</th><th>Size change</th></tr></thead>
+    <tbody>${visual
+      .map(
+        (result) => `<tr>
+          <td class="mono">${escapeHtml(result.pageKey)}</td>
+          <td class="mono">${escapeHtml(result.url)}</td>
+          <td>${result.captured ? 'yes' : `no — ${escapeHtml(result.reason)}`}</td>
+          <td>${result.captured ? `${escapeHtml(result.diffPercent)}%` : '—'}</td>
+          <td>${result.captured ? escapeHtml(result.changedPixels) : '—'}</td>
+          <td>${result.dimensionMismatch ? 'yes' : 'no'}</td>
+        </tr>`,
+      )
+      .join('')}</tbody>
+  </table>`
+              : '';
+            return `<div style="margin-bottom:14px">
+      <div><strong>${escapeHtml(run.scope)}</strong>
+        <span class="sev ${run.passed ? 'sev-low' : 'sev-high'}">${run.passed ? 'PASSED' : 'FAILED'}</span>
+        <span class="meta">${escapeHtml(run.executedAt)}</span>
+      </div>
+      ${rows}
+    </div>`;
+          })
+          .join('')
+  }
 
   <h2>Findings (first 500 of ${payload.findings.length})</h2>
   <table>

@@ -949,6 +949,21 @@ export class Store {
     return { ...input, id, createdAt: existing ? createdAt : createdAt };
   }
 
+  listValidationRuns(scanTaskId: string): Array<{ id: string; scope: string; passed: boolean; executedAt: string; payload: Record<string, unknown> }> {
+    const rows = this.db
+      .prepare('SELECT * FROM validation_run WHERE scan_task_id = ? ORDER BY executed_at DESC LIMIT 200')
+      .all(scanTaskId) as unknown as Array<{ id: string; scope: string; passed: number; executed_at: string; payload_json: string }>;
+    return rows.map((row) => {
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      } catch {
+        payload = {};
+      }
+      return { id: row.id, scope: row.scope, passed: row.passed === 1, executedAt: row.executed_at, payload };
+    });
+  }
+
   insertValidationRun(scanTaskId: string, scope: string, passed: boolean, payload: Record<string, unknown>): string {
     const id = newId('val');
     this.db

@@ -471,3 +471,30 @@ genuinely changed. That is exactly the signal the feature exists to produce — 
 
 `execute()` became async for this; the HTTP route and the tests were updated accordingly, and the
 suite grew to 126 tests (4 new: diff reported, unchanged page, capture failure, no pages given).
+
+---
+
+## 13. Ninth increment — the report finally shows what was done
+
+The report and the verification data were built independently: `validation_run` recorded
+comparisons, `migration_execution` recorded writes, and `reportAsHtml` showed neither. A report
+that lists findings but not the changes is a snapshot of a problem set, not of a migration.
+
+`buildPayload` now includes `migrations` and `validations`, and the HTML report gained two
+sections before the findings table:
+
+- **Migrations applied** — file, rule, execution status, validation status, timestamp, session id;
+- **Verification runs** — scope, pass/fail badge, timestamp, and for `VISUAL_MIGRATION` a table of
+  page, URL, captured, diff %, changed pixels and size change.
+
+Rendered and inspected against a real scan (`css/ie-fixes.css`, `WL-CSS-005`, one
+`VISUAL_MIGRATION` run at 3.65 % / 42 021 px): both tables render, the FAILED badge is legible, and
+the empty state reads "No migration was applied for this scan." rather than showing an empty table.
+
+Not embedded, by choice: the images. They live in the UI and in `validation_run`'s payload minus the
+data URLs (stripped in `compareAfterMigration`), so the JSON report stays at 37 KB for 99 findings
+instead of megabytes. A test asserts `data:image/png;base64` never appears in the export.
+
+One layout defect found by looking at the render: the rule column in the findings table wrapped
+`WL-HTML-006` onto three lines because the monospace cell breaks at hyphens. Fixed with
+`white-space: nowrap` on that column only; file paths keep wrapping.

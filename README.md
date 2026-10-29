@@ -58,7 +58,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 131 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 134 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, diff, recipes, batching, storage upgrade, visual diff,
                 #            ignore rules, incremental reuse
 ```
@@ -87,7 +87,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | Incremental scans: unchanged files reuse the previous results when the rule set matches | done |
 | Visual regression: screenshot + pixel diff, selector masking, desktop/tablet/mobile matrix | done (optional dependency) |
 | Before/after screenshots captured around a migration, stored with the execution | done (optional dependency) |
-| JSON / CSV / HTML reports traceable to a scan | done |
+| JSON / CSV / HTML reports traceable to a scan, including migrations and verification runs | done |
 | UI in Chinese, Japanese, English | done |
 
 ---

@@ -5,6 +5,17 @@ what it means for a real migration, and the smallest honest workaround.
 
 ---
 
+## Access and data safety
+
+**The API is local-only and unauthenticated.** It binds `127.0.0.1` and only grants CORS to loopback
+origins, because it can rewrite project files. Do not expose it (`WEBLIFT_HOST=0.0.0.0`) on a network
+you do not control: there is no login, no token and no per-user isolation. Anyone who can reach the
+port can scan any directory that user can read, read the sources back, and apply migrations.
+
+**Migrations keep the originals, but only as long as the data directory does.** Every written file is
+copied to `backups/<executionId>/<path>` and hash-verified before the write, and rollback refuses if
+the file drifted since. Deleting the data directory therefore deletes the only backup the tool made.
+
 ## Analysis
 
 **Only the implemented pattern set is detected.** 42 rules cover the IE features listed in the

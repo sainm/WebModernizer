@@ -783,12 +783,8 @@ read of a Shift_JIS file shifted every offset and made post-migration counts mea
 
 ### 20.3 What the review could not fix, and why
 
-- **CORS reflects any Origin and the server binds every interface.** `Access-Control-Allow-Origin`
-  echoes whatever the caller sends, `app.listen(port)` binds `*`, and there is no authentication —
-  while the UI footer says "local only". Any page the user visits can therefore create a project
-  pointing at `$HOME`, scan it, and read the sources back through the API. Narrowing this is a
-  product decision (loopback bind, allow-list of dev origins, optional token), so it is documented
-  rather than changed.
+- **~~CORS reflects any Origin and the server binds every interface.~~** Fixed in §21, which also
+  added the first HTTP-level tests — the layer these defects lived in.
 - **The commit phase is not atomic with the database.** Files are written first and `migration_execution`
   rows recorded afterwards; a database failure in between leaves edited files with no audit trail
   and no rollback path through the UI (the backups exist on disk). Cheap to narrow, not cheap to
@@ -797,3 +793,42 @@ read of a Shift_JIS file shifted every offset and made post-migration counts mea
   directly — which is exactly why the CORS, SSE and encoding bugs above lived in the server layer.
 
 Suite: 161 tests.
+
+---
+
+## 21. Seventeenth increment — closing the API to the network
+
+The review in §20 recorded the exposure but left it open, because "who may reach this port" is a
+product decision. The decision is: nobody but this machine.
+
+- **The server binds loopback.** `app.listen(port)` became `listen(port, host)` with
+  `host = WEBLIFT_HOST ?? '127.0.0.1'`. The startup line now prints the address it actually bound,
+  including the real port when `port: 0` is used, instead of always claiming `localhost`.
+  Exposing it is now deliberate: `WEBLIFT_HOST=0.0.0.0 npm start`.
+- **CORS no longer reflects the caller.** Only origins whose host is `localhost`, `127.0.0.1` or
+  `[::1]` get an `Access-Control-Allow-Origin` header. Everything else gets none, so reads are
+  blocked by the browser, and any state-changing request carrying a foreign `Origin` is rejected
+  with 403 — which also covers the "simple request" shapes that skip the preflight, the hole an
+  allow-list alone would leave open.
+- The dev server keeps working because the rule is on the host name, not on an exact origin list.
+
+**Proved by mutation, not by reading headers.** Restoring the old reflection makes exactly the two
+cross-origin tests fail, and the second one fails with `expected 201 to be 403` — i.e. a remote page
+really could create a project pointing at `/` and then scan it. Flipping the default host to
+`0.0.0.0` fails the bind assertion with `expected '0.0.0.0' to be '127.0.0.1'`.
+
+### The first HTTP tests
+
+`backend/test/apiHttp.test.ts` starts a real server on port 0 with a temp data directory and talks
+to it over `fetch`. Eight tests, one per defect class that had shipped unnoticed because every
+other suite calls the services directly:
+
+- health and rule metadata, plus the loopback bind assertion;
+- findings carry a non-zero line/column, a `WL-` rule id and a module name;
+- a Shift_JIS file is served decoded (`no U+FFFD`) and reported not stale;
+- a path outside the scanned set is refused with 403;
+- a remote origin gets no CORS grant, and its write is refused;
+- the Vite dev origin still gets a grant;
+- a finished scan's event stream is one `done` event and then closes, measured under 2 s.
+
+Suite: 169 tests.

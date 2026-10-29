@@ -378,7 +378,7 @@ const en = {
   'settings.encodings': 'Default encodings',
   'settings.security': 'Security posture',
   'settings.securityBody':
-    'Scanning is read-only. No source file is executed, no build script is run, and nothing leaves this machine. Migrations write only after a confirmed preview and always keep a hash-verified backup.',
+    'Scanning is read-only. No source file is executed, no build script is run, and nothing leaves this machine. Migrations write only after a confirmed preview and always keep a hash-verified backup. The API listens on loopback only and rejects calls from other origins.',
   'settings.dataDir': 'Data directory',
   'settings.dataDirHint': 'SQLite database, reports and migration backups live here (default: ./data).',
 } as const;
@@ -760,7 +760,7 @@ const zh: Dict = {
   'settings.encodings': '默认编码',
   'settings.security': '安全约束',
   'settings.securityBody':
-    '扫描为只读：不执行源码、不运行构建脚本、不上传任何内容。迁移只在确认预览后写入，并且始终保留经哈希校验的备份。',
+    '扫描为只读：不执行源码、不运行构建脚本、不上传任何内容。迁移只在确认预览后写入，并且始终保留经哈希校验的备份。API 仅监听本机回环地址，并拒绝来自其他来源的调用。',
   'settings.dataDir': '数据目录',
   'settings.dataDirHint': 'SQLite 数据库、报告与迁移备份存放于此（默认 ./data）。',
 };
@@ -1139,7 +1139,7 @@ const ja: Dict = {
   'settings.encodings': '既定のエンコーディング',
   'settings.security': 'セキュリティ方針',
   'settings.securityBody':
-    'スキャンは読み取り専用です。ソースを実行せず、ビルドスクリプトも起動せず、外部送信も行いません。移行はプレビュー確認後のみ書き込み、ハッシュ検証済みのバックアップを常に保持します。',
+    'スキャンは読み取り専用です。ソースを実行せず、ビルドスクリプトも起動せず、外部送信も行いません。移行はプレビュー確認後のみ書き込み、ハッシュ検証済みのバックアップを常に保持します。API はループバックのみで待ち受け、他のオリジンからの呼び出しを拒否します。',
   'settings.dataDir': 'データディレクトリ',
   'settings.dataDirHint': 'SQLite データベース、レポート、移行バックアップの保存先（既定: ./data）。',
 };

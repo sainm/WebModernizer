@@ -81,6 +81,21 @@ function parseIntParam(value: unknown, fallback: number): number {
 }
 
 /**
+ * True for origins that belong to this machine. The Vite dev server runs on another port, so
+ * the check is on the host name rather than an exact origin list.
+ */
+function isLoopbackOrigin(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+}
+
+/**
  * Decodes a source file for the viewer using the encoding the scan detected. Reading
  * everything as UTF-8 turned every Shift_JIS file into replacement characters in the editor,
  * which made a correctly handled file look like a broken one.
@@ -100,14 +115,25 @@ export function createServer(store: Store): ServerContext {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
 
-  // The Vite dev server runs on another port; allow it without opening the API to the world.
+  // The API runs on the user's machine and can rewrite files, so a browser must not be able to
+  // call it from an arbitrary page. Only loopback origins are echoed back: anything else gets no
+  // Access-Control-Allow-Origin (so reads are blocked) and is rejected outright for writes, which
+  // also covers the "simple request" shapes that skip the preflight.
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', req.headers.origin ?? '*');
-    res.header('Vary', 'Origin');
-    res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    const origin = req.headers.origin;
+    const fromLoopback = typeof origin === 'string' && isLoopbackOrigin(origin);
+    if (fromLoopback) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Vary', 'Origin');
+      res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type');
+    }
     if (req.method === 'OPTIONS') {
-      res.sendStatus(204);
+      res.sendStatus(fromLoopback || !origin ? 204 : 403);
+      return;
+    }
+    if (origin && !fromLoopback && req.method !== 'GET' && req.method !== 'HEAD') {
+      res.status(403).json({ error: 'Cross-origin requests from a page outside this machine are rejected.' });
       return;
     }
     next();
@@ -957,13 +983,25 @@ export function createServer(store: Store): ServerContext {
   return { store, scans, migrations, validation, app };
 }
 
-export function startServer(options: { port?: number; dataDir?: string } = {}): { server: ReturnType<express.Express['listen']>; context: ServerContext } {
+/**
+ * Starts the API. It binds loopback by default because it can rewrite project files and has no
+ * authentication; set WEBLIFT_HOST (or `host`) to expose it deliberately, e.g. `0.0.0.0` when the
+ * tool runs in a container or a shared dev box.
+ */
+export function startServer(options: { port?: number; dataDir?: string; host?: string } = {}): {
+  server: ReturnType<express.Express['listen']>;
+  context: ServerContext;
+} {
   const store = new Store({ dataDir: options.dataDir });
   const context = createServer(store);
   const port = options.port ?? Number(process.env.WEBLIFT_PORT ?? 8787);
-  const server = context.app.listen(port, () => {
+  const host = options.host ?? process.env.WEBLIFT_HOST ?? '127.0.0.1';
+  const server = context.app.listen(port, host, () => {
+    const address = server.address();
+    const actualPort = typeof address === 'object' && address ? address.port : port;
+    const shown = host === '0.0.0.0' || host === '::' ? 'localhost (all interfaces)' : host;
     // eslint-disable-next-line no-console
-    console.log(`[weblift] API listening on http://localhost:${port}`);
+    console.log(`[weblift] API listening on http://${shown}:${actualPort}`);
   });
   return { server, context };
 }

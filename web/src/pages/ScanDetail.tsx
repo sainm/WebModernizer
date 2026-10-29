@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, formatDuration, formatTime, type ScanSummary } from '../api';
 import { useAsync } from '../hooks';
 import { useI18n } from '../i18n';
@@ -20,6 +20,8 @@ export default function ScanDetail() {
   const meta = useAsync(() => api.meta(), []);
   const [tab, setTab] = useState<Tab>('dashboard');
   const [applying, setApplying] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const navigate = useNavigate();
   const [applyNotice, setApplyNotice] = useState<string | null>(null);
 
   if (scan.loading) return <Loading />;
@@ -28,9 +30,25 @@ export default function ScanDetail() {
   if (!current) return <div className="page"><Empty>{t('scan.noScan')}</Empty></div>;
 
   const running = current.status === 'RUNNING' || current.status === 'QUEUED';
-  const total = progress?.totalFiles ?? current.scannedFileCount;
+  // totalFileCount is written before parsing starts, so an interrupted scan keeps the real
+  // denominator instead of presenting its partial count as if it were the whole project.
+  const total = progress?.totalFiles ?? (current.totalFileCount || current.scannedFileCount);
   const done = progress?.scannedFiles ?? current.scannedFileCount;
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+  const interrupted = current.status === 'CANCELLED' || current.status === 'FAILED';
+  // Only files that were fully analysed are stored, so this is a safe resume point.
+  const keptFiles = files.data?.items.length ?? 0;
+
+  const resume = async (): Promise<void> => {
+    setResuming(true);
+    try {
+      const next = await api.startScan(current.projectId);
+      navigate(`/scans/${next.id}`);
+    } finally {
+      setResuming(false);
+    }
+  };
 
   const rulesChanged = Boolean(
     current.ruleSignature && meta.data?.ruleSignature && current.ruleSignature !== meta.data.ruleSignature,
@@ -89,6 +107,20 @@ export default function ScanDetail() {
           </>
         }
       />
+
+      {interrupted ? (
+        <div className="callout warn" style={{ marginBottom: 14 }}>
+          <div className="row wrap">
+            <span className="grow">
+              {keptFiles > 0 ? t('scan.interruptedHint', { count: keptFiles }) : t('scan.interruptedEmpty')}
+            </span>
+            <button className="btn small primary" onClick={resume} disabled={resuming}>
+              {resuming ? <span className="spinner" /> : null}{' '}
+              {keptFiles > 0 ? t('scan.resume') : t('project.runScan')}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {rulesChanged ? (
         <div className="callout warn" style={{ marginBottom: 14 }}>
@@ -158,7 +190,7 @@ export default function ScanDetail() {
         </Card>
 
         <Card title={t('scans.phase')}>
-          <PhaseList active={current.phase} done={!running} />
+          <PhaseList active={current.phase} status={current.status} />
         </Card>
       </div>
 

@@ -53,7 +53,7 @@ export function useScanStream(scanId: string | null, initial: ScanTask | null): 
     if (!initial) return;
     setProgress({
       scannedFiles: initial.scannedFileCount,
-      totalFiles: initial.scannedFileCount,
+      totalFiles: initial.totalFileCount || initial.scannedFileCount,
       parsedFiles: initial.parsedFileCount,
       failedFiles: initial.failedFileCount,
       findings: initial.findingCount,
@@ -129,20 +129,35 @@ const PHASES: ScanPhase[] = [
   'REPORT_GENERATION',
 ];
 
-export function PhaseList({ active, done }: { active: ScanPhase | null; done: boolean }) {
+export function PhaseList({ active, status }: { active: ScanPhase | null; status: ScanTask['status'] }) {
   const { t } = useI18n();
-  const activeIndex = active ? PHASES.indexOf(active) : done ? PHASES.length : -1;
+  const finished = status === 'COMPLETED' || status === 'COMPLETED_WITH_WARNINGS';
+  // A cancelled or failed scan reached some phase and stopped there. Colouring every phase
+  // green would claim it produced a report, which is exactly what did not happen.
+  const stopped = status === 'CANCELLED' || status === 'FAILED';
+  const activeIndex = active ? PHASES.indexOf(active) : finished ? PHASES.length : -1;
 
   return (
     <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
       {PHASES.map((phase, index) => {
-        const state = index < activeIndex || (done && index <= activeIndex) ? 'done' : index === activeIndex ? 'active' : 'pending';
+        const state: 'done' | 'active' | 'stopped' | 'pending' = stopped
+          ? index < activeIndex
+            ? 'done'
+            : index === activeIndex
+              ? 'stopped'
+              : 'pending'
+          : index < activeIndex || (finished && index <= activeIndex)
+            ? 'done'
+            : index === activeIndex
+              ? 'active'
+              : 'pending';
         return (
           <li key={phase} className="row" style={{ fontSize: 12, color: state === 'pending' ? 'var(--text-3)' : 'var(--text)' }}>
             <span
               className="dot"
               style={{
-                background: state === 'done' ? 'var(--ok)' : state === 'active' ? 'var(--accent)' : 'var(--border-strong)',
+                background:
+                  state === 'done' ? 'var(--ok)' : state === 'stopped' ? 'var(--medium)' : state === 'active' ? 'var(--accent)' : 'var(--border-strong)',
                 width: 7,
                 height: 7,
               }}
@@ -151,6 +166,7 @@ export function PhaseList({ active, done }: { active: ScanPhase | null; done: bo
               {t(`phase.${phase}`)}
             </span>
             {state === 'active' ? <Spinner /> : null}
+            {state === 'stopped' ? <span className="muted" style={{ fontSize: 11 }}>{t('scans.stoppedHere')}</span> : null}
           </li>
         );
       })}

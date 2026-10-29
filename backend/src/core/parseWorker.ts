@@ -37,6 +37,13 @@ interface AnalyzeTask {
 
 export type WorkerTask = HashTask | AnalyzeTask;
 
+/**
+ * What the caller supplies: the same union without the id the pool assigns.
+ * Written as a union of Omit<> rather than Omit<union> — the latter collapses to the
+ * common keys, which silently drops every analyze-only field.
+ */
+export type WorkerTaskInput = Omit<HashTask, 'id'> | Omit<AnalyzeTask, 'id'>;
+
 if (!parentPort) {
   throw new Error('parseWorker must be started as a worker thread');
 }

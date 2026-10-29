@@ -173,7 +173,18 @@ the bottleneck — it is not a default because it measured slower.
 
 **Performance is single-process and synchronous per file.** The fixture (12 files) scans in ~0.3 s.
 A 5 000-file legacy tree will work but blocks the event loop in bursts; the orchestrator yields
-every 8 files so SSE and cancellation stay responsive. Parallel workers are the obvious next step.
+every 8 files so SSE progress and cancellation stay responsive. Parallel workers are the obvious
+next step.
+
+**Cancelling a scan stops between files, and keeps what it finished.** A file is written only once
+it has been fully analysed, so the stored rows of a cancelled scan are a clean prefix of the work,
+never a half-parsed file. The next scan on the same project picks it up: files whose SHA-256 and
+rule signature match are reused, the rest are parsed. Two caveats:
+
+- Granularity is one file. A single enormous file cannot be interrupted midway.
+- With a worker pool (`WEBLIFT_WORKERS`) every file of the batch is dispatched at once, so
+  cancellation is only observed as replies arrive — files already in flight still complete. The pool
+  is off by default, and this is one more reason not to turn it on for large trees.
 
 ---
 
@@ -182,10 +193,10 @@ every 8 files so SSE and cancellation stay responsive. Parallel workers are the 
 1. **More recipes for the highest-volume patterns** once real projects show which ones dominate —
    `document.all`, `element.innerText` and `window.event` handler signatures are the likely
    candidates, each needing its own precondition argument.
-2. **Retro-apply a new ignore rule to the current scan**, so the count shown in the dialog becomes
-   the visible result immediately instead of after a rescan.
-3. **Diff masking and a viewport matrix for visual regression** — mask volatile regions by
-   selector, and capture desktop/tablet/mobile so responsive breakage is caught too.
-4. **Rule authoring safeguards**: a JSON-schema check plus a required fixture per rule, so adding
-   a rule without tests fails the build instead of silently lowering coverage.
+2. **Persist progress while the scan runs, not only when it stops.** A cancelled or failed scan is
+   saved, but a hard kill (`SIGKILL`, power loss) still loses the run, because rows are written when
+   the run ends. Writing a batch every N files would make even that case resumable.
+3. **Manual-status adoption.** Every MANUAL finding currently keeps its initial status until someone
+   touches it; a lightweight "fixed in code, verified by the next scan" loop would turn the dashboard
+   into a real burn-down chart instead of two independent snapshots.
 

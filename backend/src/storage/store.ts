@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS scan_task (
   parsed_file_count INTEGER NOT NULL DEFAULT 0,
   failed_file_count INTEGER NOT NULL DEFAULT 0,
   finding_count INTEGER NOT NULL DEFAULT 0,
+  total_file_count INTEGER NOT NULL DEFAULT 0,
   current_file TEXT,
   error_summary TEXT,
   config_snapshot TEXT NOT NULL,
@@ -307,6 +308,11 @@ export class Store {
     if (!scanColumns.includes('rule_signature')) {
       this.db.exec('ALTER TABLE scan_task ADD COLUMN rule_signature TEXT');
     }
+    // The number of files discovery found, whether or not the run reached all of them. Without it
+    // an interrupted scan can only say "48 files", which reads exactly like "48 of 48".
+    if (!scanColumns.includes('total_file_count')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN total_file_count INTEGER NOT NULL DEFAULT 0');
+    }
     const fileColumns = (this.db.prepare('PRAGMA table_info(scan_file)').all() as unknown as Array<{ name: string }>).map(
       (row) => row.name,
     );
@@ -394,6 +400,7 @@ export class Store {
       parsedFileCount: 0,
       failedFileCount: 0,
       findingCount: 0,
+      totalFileCount: 0,
       currentFile: null,
       errorSummary: null,
       configSnapshot: config,
@@ -421,6 +428,7 @@ export class Store {
         | 'parsedFileCount'
         | 'failedFileCount'
         | 'findingCount'
+        | 'totalFileCount'
         | 'currentFile'
         | 'errorSummary'
       >
@@ -437,6 +445,7 @@ export class Store {
       parsedFileCount: 'parsed_file_count',
       failedFileCount: 'failed_file_count',
       findingCount: 'finding_count',
+      totalFileCount: 'total_file_count',
       currentFile: 'current_file',
       errorSummary: 'error_summary',
       cancelled: 'cancelled',
@@ -998,6 +1007,7 @@ interface ScanRow {
   parsed_file_count: number;
   failed_file_count: number;
   finding_count: number;
+  total_file_count: number;
   current_file: string | null;
   error_summary: string | null;
   config_snapshot: string;
@@ -1124,6 +1134,7 @@ function mapScan(row: ScanRow): ScanTask {
     parsedFileCount: row.parsed_file_count,
     failedFileCount: row.failed_file_count,
     findingCount: row.finding_count,
+    totalFileCount: row.total_file_count,
     currentFile: row.current_file,
     errorSummary: row.error_summary,
     configSnapshot: JSON.parse(row.config_snapshot) as ProjectConfig,

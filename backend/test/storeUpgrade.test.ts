@@ -103,4 +103,59 @@ describe('storage upgrade path', () => {
       second.close();
     }
   });
+
+  it('adds the scan_task columns that were introduced after the first release', () => {
+    const dataDir = tempDir();
+    mkdirSync(dataDir, { recursive: true });
+
+    // A scan table from before rule signatures and total file counts existed. Every column
+    // added to an existing table has to be in migrate(), or opening an old data directory
+    // dies with "no such column" — a mistake that has been made twice in this codebase.
+    const legacy = new DatabaseSync(join(dataDir, 'weblift.sqlite'));
+    legacy.exec(`
+CREATE TABLE scan_task (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  project_name TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  phase TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  scanned_file_count INTEGER NOT NULL DEFAULT 0,
+  parsed_file_count INTEGER NOT NULL DEFAULT 0,
+  failed_file_count INTEGER NOT NULL DEFAULT 0,
+  finding_count INTEGER NOT NULL DEFAULT 0,
+  current_file TEXT,
+  error_summary TEXT,
+  config_snapshot TEXT NOT NULL,
+  log_json TEXT NOT NULL DEFAULT '[]',
+  cancelled INTEGER NOT NULL DEFAULT 0
+);
+`);
+    legacy
+      .prepare(
+        `INSERT INTO scan_task (id, project_id, project_name, root_path, status, created_at, config_snapshot)
+         VALUES ('scn_old', 'prj_1', 'Legacy', '/tmp/legacy', 'COMPLETED', '2026-01-01T00:00:00.000Z', '{}')`,
+      )
+      .run();
+    legacy.close();
+
+    const store = new Store({ dataDir });
+    try {
+      const scan = store.getScan('scn_old');
+      expect(scan).not.toBeNull();
+      expect(scan?.status).toBe('COMPLETED');
+      // Old rows have no total, so the UI falls back to the scanned count for them.
+      expect(scan?.totalFileCount).toBe(0);
+      expect(scan?.ruleSignature).toBeNull();
+
+      // New rows can carry both.
+      store.updateScan('scn_old', { totalFileCount: 400, status: 'CANCELLED' });
+      expect(store.getScan('scn_old')?.totalFileCount).toBe(400);
+    } finally {
+      store.close();
+    }
+  });
 });

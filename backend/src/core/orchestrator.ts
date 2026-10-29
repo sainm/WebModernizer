@@ -128,6 +128,10 @@ interface Runner {
 }
 
 const MAX_LOG_ENTRIES = 500;
+/** Files parsed between two event loop turns when no worker pool is used. */
+const YIELD_EVERY_FILES = 8;
+
+const yieldToEventLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
 
 export class ScanManager {
   private readonly store: Store;
@@ -200,8 +204,10 @@ export class ScanManager {
     pool: ParsePool | null;
     runner: Runner;
     onProgress: (done: number, currentFile: string | null) => void;
+    /** Called as soon as one file is finished, so a cancelled scan can persist progress. */
+    onFileReady?: (file: PreparedFile, index: number) => void;
   }): Promise<PreparedFile[]> {
-    const { entries, scan, scanTaskId, config, disabledRuleIds, previous, previousFiles, previousFindings, runner, onProgress } = options;
+    const { entries, scan, scanTaskId, config, disabledRuleIds, previous, previousFiles, previousFindings, runner, onProgress, onFileReady } = options;
     const results: Array<PreparedFile | null> = new Array(entries.length).fill(null);
 
     // The pool is an optimisation, never a requirement: if workers cannot start in this
@@ -263,6 +269,7 @@ export class ScanManager {
           facts: null,
           reused: true,
         };
+        onFileReady?.(results[index] as PreparedFile, index);
         return;
       }
       analyzeIndexes.push(index);
@@ -272,29 +279,49 @@ export class ScanManager {
     if (analyzeIndexes.length > 0) {
       this.checkpoint(runner);
       if (activePool) {
-        const replies = await activePool.map<WorkerAnalyzeReply>(
-          analyzeIndexes.map((index) => ({
-            op: 'analyze',
-            rootPath: scan.rootPath,
-            relPath: entries[index].relPath,
-            absPath: entries[index].absolutePath,
-            scanTaskId,
-            encodingCandidates: config.encodingCandidates,
-            forceEncoding: config.forceEncoding,
-            disabledRuleIds: [...disabledRuleIds],
-          })),
+        const replies = await Promise.all(
+          analyzeIndexes.map((index) =>
+            activePool
+              .run<WorkerAnalyzeReply>({
+                op: 'analyze',
+                rootPath: scan.rootPath,
+                relPath: entries[index].relPath,
+                absPath: entries[index].absolutePath,
+                scanTaskId,
+                encodingCandidates: config.encodingCandidates,
+                forceEncoding: config.forceEncoding,
+                disabledRuleIds: [...disabledRuleIds],
+              })
+              .then((reply) => {
+                // The pool starts every file at once, so cancellation is checked per reply
+                // rather than once for the batch.
+                if (runner.cancelled) throw new CancelledError();
+                const prepared = toPrepared(entries[index], reply);
+                results[index] = prepared;
+                onFileReady?.(prepared, index);
+                return reply;
+              }),
+          ),
         );
-        analyzeIndexes.forEach((index, position) => {
-          results[index] = toPrepared(entries[index], replies[position]);
-        });
+        void replies;
         onProgress(entries.length, null);
       } else {
         let done = hashIndexes.length;
+        let sinceYield = 0;
         for (const index of analyzeIndexes) {
           this.checkpoint(runner);
           results[index] = this.analyzeInProcess(entries[index], scan, scanTaskId, config, disabledRuleIds);
+          onFileReady?.(results[index] as PreparedFile, index);
           done += 1;
           onProgress(done, entries[index].relPath);
+          // Parsing is synchronous, so without an explicit yield a large project blocks the
+          // event loop for the whole run: progress never reaches the UI and a cancel request
+          // cannot even be read. Every few files the loop takes a breath.
+          sinceYield += 1;
+          if (sinceYield >= YIELD_EVERY_FILES) {
+            sinceYield = 0;
+            await yieldToEventLoop();
+          }
         }
       }
     }
@@ -414,11 +441,71 @@ export class ScanManager {
     const problems: ParseProblem[] = [];
     const fileRows: ScanFileRow[] = [];
     const facts: FileRefFacts[] = [];
+    const reusedPaths = new Set<string>();
     let discovery: DiscoveryResult | null = null;
     let parsedCount = 0;
     let failedCount = 0;
     let scannedCount = 0;
     let activePhase: ScanPhase = 'FILE_DISCOVERY';
+
+    // Files prepared so far, keyed by their discovery index, plus a guard so the accumulation
+    // below runs at most once per file whether it arrives from the callback or the final loop.
+    const preparedByIndex = new Map<number, PreparedFile>();
+    const acceptedIndexes = new Set<number>();
+
+    /**
+     * Moves one prepared file into the scan's accumulators. Called both while preparing (so a
+     * cancelled scan keeps what it already finished) and after preparation returns.
+     */
+    const acceptFile = (item: PreparedFile, index: number): void => {
+      if (acceptedIndexes.has(index)) return;
+      acceptedIndexes.add(index);
+      if (item.status === 'FAILED') failedCount += 1;
+      else parsedCount += 1;
+      problems.push(...item.problems);
+      if (item.reused) reusedPaths.add(item.entry.relPath);
+      if (item.facts) facts.push(item.facts);
+
+      const fileFindings = item.findings;
+      for (const finding of fileFindings) {
+        const match = findIgnoreMatch(finding, ignoreRules);
+        if (match) {
+          finding.status = 'IGNORED';
+          finding.statusNote = ignoreNote(match.rule, match.reason);
+          finding.statusUpdatedAt = nowIso();
+          ignoredCount += 1;
+          continue;
+        }
+        // A reused finding may carry a rule note from a rule that has since been removed.
+        if (item.reused && finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith(IGNORE_NOTE_PREFIX)) {
+          finding.status = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL'
+            ? 'READY_FOR_MIGRATION'
+            : 'DETECTED';
+          finding.statusNote = undefined;
+        }
+      }
+      findings.push(...fileFindings);
+      fileRows.push({
+        id: newId('fil'),
+        scanTaskId: scanId,
+        path: item.entry.relPath,
+        language: item.language,
+        size: item.entry.size,
+        hash: item.hash,
+        encoding: item.encoding,
+        parseStatus: item.status,
+        findingCount: fileFindings.length,
+        reused: item.reused,
+      });
+    };
+
+    /** Accepts every buffered file in discovery order, skipping the ones already accepted. */
+    const drainPrepared = (): void => {
+      for (const index of [...preparedByIndex.keys()].sort((a, b) => a - b)) {
+        const item = preparedByIndex.get(index);
+        if (item) acceptFile(item, index);
+      }
+    };
 
     const setPhase = (phase: ScanPhase): void => {
       activePhase = phase;
@@ -482,18 +569,24 @@ export class ScanManager {
 
       /* ---------------- phases 3-5: prepare (read + parse + detect) ---------------- */
       setPhase('PARSING');
+      // Recorded before parsing starts, so an interrupted scan can still report "48 of 400"
+      // instead of implying that 48 was the whole project.
+      this.store.updateScan(scanId, { totalFileCount: discoveredFiles.length });
 
       // Incremental scan: an unchanged file whose rules have not changed either can reuse
       // the previous results. The rule signature guards against reusing findings that a
       // changed rule set would no longer produce.
       const signature = ruleSignature();
+      // A cancelled or failed scan is a valid reuse source, not just a completed one: whatever
+      // it persisted is complete *per file* (a file is either fully analysed or absent), so
+      // starting a new scan after an interruption resumes where the old one stopped instead of
+      // re-parsing everything.
+      const reusableStatuses = new Set<ScanStatus>(['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'CANCELLED', 'FAILED']);
       const previous = this.store
         .listScans(task.projectId, 5)
         .find(
           (candidate) =>
-            candidate.id !== scanId &&
-            candidate.ruleSignature === signature &&
-            (candidate.status === 'COMPLETED' || candidate.status === 'COMPLETED_WITH_WARNINGS'),
+            candidate.id !== scanId && candidate.ruleSignature === signature && reusableStatuses.has(candidate.status),
         ) ?? null;
       const previousFiles = previous ? new Map(this.store.listScanFiles(previous.id).map((file) => [file.path, file])) : null;
       // One query for the whole previous scan instead of one per file: on a 1 400-file
@@ -505,7 +598,15 @@ export class ScanManager {
           list.push(finding);
           previousFindings.set(finding.filePath, list);
         }
-        this.log(runner, scanId, 'info', 'PARSING', `Incremental: comparing against scan ${previous.id}`);
+        const partial = previous.status === 'CANCELLED' || previous.status === 'FAILED';
+        this.log(
+          runner,
+          scanId,
+          'info',
+          'PARSING',
+          `${partial ? 'Resuming from partial' : 'Incremental: comparing against'} scan ${previous.id}` +
+            (partial ? ` (${this.store.listScanFiles(previous.id).length} file(s) already analysed)` : ''),
+        );
       }
 
       const pool = createParsePool();
@@ -527,6 +628,11 @@ export class ScanManager {
             scannedCount = done;
             if (done % 20 === 0 || done === discoveredFiles.length) emitProgress(currentFile);
           },
+          // Buffer, do not accumulate: files finish out of order when a pool is used, and the
+          // final ordering should still follow the discovery order.
+          onFileReady: (file: PreparedFile, index: number) => {
+            preparedByIndex.set(index, file);
+          },
         });
       } finally {
         await pool?.close();
@@ -534,46 +640,7 @@ export class ScanManager {
       this.checkpoint(runner);
 
       /* ---------------- apply: reuse notes, ignore rules, rows ---------------- */
-      const reusedPaths = new Set<string>();
-      for (const item of prepared) {
-        if (item.status === 'FAILED') failedCount += 1;
-        else parsedCount += 1;
-        problems.push(...item.problems);
-        if (item.reused) reusedPaths.add(item.entry.relPath);
-        if (item.facts) facts.push(item.facts);
-
-        const fileFindings = item.findings;
-        for (const finding of fileFindings) {
-          const match = findIgnoreMatch(finding, ignoreRules);
-          if (match) {
-            finding.status = 'IGNORED';
-            finding.statusNote = ignoreNote(match.rule, match.reason);
-            finding.statusUpdatedAt = nowIso();
-            ignoredCount += 1;
-            continue;
-          }
-          // A reused finding may carry a rule note from a rule that has since been removed.
-          if (item.reused && finding.status === 'IGNORED' && (finding.statusNote ?? '').startsWith(IGNORE_NOTE_PREFIX)) {
-            finding.status = finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL'
-              ? 'READY_FOR_MIGRATION'
-              : 'DETECTED';
-            finding.statusNote = undefined;
-          }
-        }
-        findings.push(...fileFindings);
-        fileRows.push({
-          id: newId('fil'),
-          scanTaskId: scanId,
-          path: item.entry.relPath,
-          language: item.language,
-          size: item.entry.size,
-          hash: item.hash,
-          encoding: item.encoding,
-          parseStatus: item.status,
-          findingCount: fileFindings.length,
-          reused: item.reused,
-        });
-      }
+      prepared.forEach((item, index) => acceptFile(item, index));
 
       /* ---------------- phase 6: references ---------------- */
       setPhase('REFERENCE_ANALYSIS');
@@ -664,6 +731,7 @@ export class ScanManager {
       if (err instanceof CancelledError) {
         // Keep whatever was analyzed so far; never leave the task in RUNNING.
         try {
+          drainPrepared();
           if (fileRows.length) this.store.insertScanFiles(fileRows);
           if (findings.length) this.store.insertFindings(findings);
           if (problems.length) this.store.insertParseProblems(scanId, problems);
@@ -674,7 +742,9 @@ export class ScanManager {
         this.store.updateScan(scanId, {
           status: 'CANCELLED',
           completedAt,
-          phase: null,
+          // Kept on purpose: "stopped during parsing" is the only useful answer to
+          // "where did it stop", and it is what the phase list renders.
+          phase: activePhase,
           scannedFileCount: scannedCount,
           parsedFileCount: parsedCount,
           failedFileCount: failedCount,
@@ -686,12 +756,28 @@ export class ScanManager {
         this.emit(runner, { scanId, type: 'done', at: completedAt, status: 'CANCELLED' });
       } else {
         const message = (err as Error).message;
+        // Keep the finished files: a failure halfway through a 5 000-file project should not
+        // throw away the 4 000 that were analysed, and persisting them makes the next scan a
+        // resume rather than a restart.
+        try {
+          drainPrepared();
+          if (fileRows.length) this.store.insertScanFiles(fileRows);
+          if (findings.length) this.store.insertFindings(findings);
+          if (problems.length) this.store.insertParseProblems(scanId, problems);
+        } catch {
+          // Persisting partial results must not mask the original failure.
+        }
         const completedAt = nowIso();
         this.store.updateScan(scanId, {
           status: 'FAILED',
           completedAt,
-          phase: null,
+          phase: activePhase,
           errorSummary: message,
+          scannedFileCount: scannedCount,
+          parsedFileCount: parsedCount,
+          failedFileCount: failedCount,
+          findingCount: findings.length,
+          currentFile: null,
           logJson: JSON.stringify(runner.log),
         });
         this.log(runner, scanId, 'error', null, `Scan failed: ${message}`);

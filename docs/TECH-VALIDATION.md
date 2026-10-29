@@ -653,3 +653,77 @@ one test fail (`does not report include fragments as missing a doctype`), and re
 the suite to green. A regression test that has never failed is a hypothesis.
 
 Suite: 153 tests.
+
+---
+
+## 19. Fifteenth increment — a scan that can actually be interrupted
+
+Cancellation was decorative. `POST /scans/:id/cancel` returned `false` on a scan that was visibly
+still running, and `docs/LIMITATIONS.md` claimed the orchestrator "yields every 8 files so SSE and
+cancellation stay responsive" — a sentence describing behaviour that had never been written.
+
+Two separate defects were stacked on top of each other:
+
+1. **The prepare phase never yielded.** Parsing runs in-process, and the loop body was fully
+   synchronous, so a 1 400-file scan occupied the event loop from start to finish. The cancel
+   request could not be *read*, let alone acted on, and the SSE progress events were all emitted
+   in one burst at the end. The loop now takes an event loop turn every 8 files
+   (`YIELD_EVERY_FILES`, `setImmediate`).
+2. **Nothing was accumulated until every file was done.** Findings, file rows and problems were
+   built in a single loop *after* `prepareFiles()` resolved. A cancellation that did land
+   persisted an empty result, because the arrays it saved were still empty.
+
+`prepareFiles()` now reports each finished file through `onFileReady`, and `run()` accepts them
+through one idempotent `acceptFile(item, index)` that holds the ignore-rule decisions too. Files are
+buffered by discovery index and drained in that order, so a worker pool finishing out of order does
+not randomise the stored rows. The cancellation and failure paths call the same `drainPrepared()`
+before persisting, which is what makes "the scan stopped early" and "the scan can be resumed"
+the same mechanism instead of two.
+
+Resuming then needed one change: a `CANCELLED` or `FAILED` scan is now a valid reuse source
+(previously only a completed one). It is sound because a file row is written only once that file is
+fully analysed — a partial scan is a clean prefix, never a half-parsed file. The log distinguishes
+the two cases (`Resuming from partial scan …` versus `Incremental: comparing against …`), because
+the user experience differs even though the code path does not.
+
+The UI states it plainly: an interrupted scan shows how many files survived and offers a resume
+button that starts a new scan (which reuses them); when nothing survived, it says so instead of
+promising reuse of zero files. All three languages.
+
+**Verified end to end, over HTTP, not in a unit test.** A 400-file generated project: the client
+cancels on the first progress event past 40 files.
+
+```
+scan1: CANCELLED | cancel ack: true | files kept: 48
+scan2: COMPLETED | files: 400 | reused: 48
+resume matched kept files: true
+```
+
+**Verified by mutation.** Removing `drainPrepared()` from the cancel path fails exactly one test
+(`kept.length` is 0); removing the event loop yield fails the same test on `cancelAck`, which is the
+proof that the starvation was real rather than theoretical.
+
+### What a screenshot exposed
+
+Reading the API output was not enough. The rendered page said **"48 / 48 — 100 %"** for a scan whose
+banner said it did not finish, and the phase list showed all eight phases green, report generation
+included. Two display bugs that no assertion had covered:
+
+- The progress denominator fell back to `scannedFileCount`, which for an interrupted scan *is* the
+  number of finished files — so the bar always read 100 %. Fixed by storing `total_file_count` at
+  discovery time (`scan_task` column, added through `migrate()`), and by keeping the last active
+  phase instead of nulling it on cancel, so the list can say **"Parsing — stopped here"** in amber
+  and leave the rest grey.
+- `PhaseList` treated "not running" as "finished", which is how a cancelled scan came to claim it
+  had generated a report. It now takes the status, not a boolean.
+
+Both were caught by looking at the page, not by the test suite, which is the recurring lesson of
+this project: the suite protects what someone thought to assert.
+
+The new column got a guard of its own, because this is the third time a column was added:
+`storeUpgrade.test.ts` now builds a `scan_task` table from before rule signatures existed, opens it
+with the current `Store`, and reads the row back. Removing the `ALTER TABLE` from `migrate()` fails
+that test with `no such column`.
+
+Suite: 158 tests.
+

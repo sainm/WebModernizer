@@ -60,6 +60,7 @@ export interface ScanTask {
   parsedFileCount: number;
   failedFileCount: number;
   findingCount: number;
+  totalFileCount: number;
   currentFile: string | null;
   errorSummary: string | null;
   configSnapshot: ProjectConfig;

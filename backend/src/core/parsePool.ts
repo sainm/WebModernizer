@@ -1,6 +1,6 @@
 import { cpus } from 'node:os';
 import { Worker } from 'node:worker_threads';
-import type { WorkerTask } from './parseWorker.js';
+import type { WorkerTask, WorkerTaskInput } from './parseWorker.js';
 
 type Pending = {
   resolve: (value: unknown) => void;
@@ -18,7 +18,7 @@ export class ParsePool {
   private readonly size: number;
   private readonly workers: Worker[] = [];
   private readonly idle: Worker[] = [];
-  private readonly queue: Array<{ task: WorkerTask; pending: Pending }> = [];
+  private readonly queue: Array<{ task: WorkerTaskInput; pending: Pending }> = [];
   private readonly inFlight = new Map<number, Pending>();
   private sequence = 0;
   private closed = false;
@@ -65,23 +65,23 @@ export class ParsePool {
   private pump(): void {
     while (this.queue.length > 0 && this.idle.length > 0) {
       const worker = this.idle.pop() as Worker;
-      const next = this.queue.shift() as { task: WorkerTask; pending: Pending };
+      const next = this.queue.shift() as { task: WorkerTaskInput; pending: Pending };
       const id = (this.sequence += 1);
       this.inFlight.set(id, next.pending);
       worker.postMessage({ ...next.task, id });
     }
   }
 
-  run<T>(task: Omit<WorkerTask, 'id'>): Promise<T> {
+  run<T>(task: WorkerTaskInput): Promise<T> {
     if (this.closed) return Promise.reject(new Error('pool is closed'));
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({ task: task as WorkerTask, pending: { resolve: resolve as (value: unknown) => void, reject } });
+      this.queue.push({ task, pending: { resolve: resolve as (value: unknown) => void, reject } });
       this.pump();
     });
   }
 
   /** Convenience wrapper: every task in parallel, bounded by the pool size. */
-  map<T>(tasks: Array<Omit<WorkerTask, 'id'>>): Promise<T[]> {
+  map<T>(tasks: WorkerTaskInput[]): Promise<T[]> {
     return Promise.all(tasks.map((task) => this.run<T>(task)));
   }
 

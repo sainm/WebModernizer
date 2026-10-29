@@ -254,6 +254,8 @@ export interface ScanTask {
   parsedFileCount: number;
   failedFileCount: number;
   findingCount: number;
+  /** Files discovery found. Differs from scannedFileCount when a scan was interrupted. */
+  totalFileCount: number;
   currentFile: string | null;
   errorSummary: string | null;
   /** Project config snapshot captured when the scan started */

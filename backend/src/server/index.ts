@@ -80,6 +80,19 @@ function parseIntParam(value: unknown, fallback: number): number {
   return Number.isFinite(num) ? num : fallback;
 }
 
+/**
+ * Decodes a source file for the viewer using the encoding the scan detected. Reading
+ * everything as UTF-8 turned every Shift_JIS file into replacement characters in the editor,
+ * which made a correctly handled file look like a broken one.
+ */
+function decodeSource(buffer: Buffer, encoding: string | null | undefined): string {
+  try {
+    return new TextDecoder(encoding ?? 'utf-8', { fatal: false }).decode(buffer);
+  } catch {
+    return buffer.toString('utf8');
+  }
+}
+
 export function createServer(store: Store): ServerContext {
   const scans = new ScanManager(store);
   const migrations = new MigrationService(store);
@@ -403,20 +416,32 @@ export function createServer(store: Store): ServerContext {
     const send = (event: unknown): void => {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
+    // The snapshot uses the discovery total, not the scanned count: on an interrupted scan those
+    // differ, and the client would otherwise show "48 of 48" again as soon as the stream opens.
+    const snapshot = {
+      scannedFiles: scan.scannedFileCount,
+      totalFiles: scan.totalFileCount || scan.scannedFileCount,
+      parsedFiles: scan.parsedFileCount,
+      failedFiles: scan.failedFileCount,
+      findings: scan.findingCount,
+      currentFile: scan.currentFile,
+    };
+    const terminal = ['COMPLETED', 'COMPLETED_WITH_WARNINGS', 'FAILED', 'CANCELLED'].includes(scan.status);
+    if (terminal) {
+      // Nothing will ever be emitted for a finished scan. Sending one final event and closing
+      // is what the client waits for; leaving the stream open leaked one of the browser's six
+      // connections on every visit to a completed scan.
+      send({ scanId, type: 'done', at: new Date().toISOString(), status: scan.status, progress: snapshot });
+      res.end();
+      return;
+    }
     send({
       scanId,
       type: 'status',
       at: new Date().toISOString(),
       status: scan.status,
       phase: scan.phase,
-      progress: {
-        scannedFiles: scan.scannedFileCount,
-        totalFiles: scan.scannedFileCount,
-        parsedFiles: scan.parsedFileCount,
-        failedFiles: scan.failedFileCount,
-        findings: scan.findingCount,
-        currentFile: scan.currentFile,
-      },
+      progress: snapshot,
     });
     const unsubscribe = scans.subscribe(scanId, send);
     const heartbeat = setInterval(() => res.write(': keep-alive\n\n'), 15000);
@@ -461,7 +486,7 @@ export function createServer(store: Store): ServerContext {
         res.status(413).json({ error: 'file exceeds the 4 MB viewer limit' });
         return;
       }
-      const text = buffer.toString('utf8');
+      const text = decodeSource(buffer, known.encoding);
       res.json({
         path: relPath,
         language: known.language,
@@ -643,7 +668,7 @@ export function createServer(store: Store): ServerContext {
     res.json({
       path: finding.filePath,
       language: finding.language,
-      content: buffer.toString('utf8'),
+      content: decodeSource(buffer, known?.encoding),
       stale: known ? known.hash !== sha256(buffer) : true,
       finding,
     });

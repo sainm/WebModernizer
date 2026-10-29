@@ -154,6 +154,13 @@ auto-detected. A GBK file without a declared charset will be decoded as UTF-8 wi
 characters, reported as a decode problem, and its findings may be mislocated. Set `forceEncoding`
 per project in that case.
 
+**A file that is not UTF-8 is scanned, but never migrated.** Detection, parsing and finding
+locations all work for Shift_JIS / EUC-JP / ISO-2022-JP, but writing back would require re-encoding
+the whole file, and the tool has no encoder for those charsets. Rewriting one as UTF-8 destroys
+every non-ASCII character in it — this was the behaviour until it was caught by review and covered
+by `backend/test/encodingSafety.test.ts`. Such files are now refused at preview time with an
+explicit reason; convert the file to UTF-8 (or migrate it by hand) and rescan.
+
 **Large-file and binary handling is coarse.** Files above 2 MB are skipped with a recorded reason;
 binary detection is a NUL-byte probe over the first 8 KB.
 

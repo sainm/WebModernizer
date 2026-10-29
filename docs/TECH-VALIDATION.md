@@ -727,3 +727,73 @@ that test with `no such column`.
 
 Suite: 158 tests.
 
+
+---
+
+## 20. Sixteenth increment — a review that found silent data loss
+
+A deliberate review pass over the whole tree, looking for the things the suite could not see.
+It found one defect that destroys user data, one that exposes the API to any website, and a
+handful of smaller ones. All are recorded here so the next reader does not have to re-derive them.
+
+### 20.1 Migrating a non-UTF-8 file destroyed every non-ASCII character in it
+
+The scanner decodes with the detected encoding (`textDecode.ts`) and reports locations against
+that text. The migration path did not: `readTarget()` and `writeFileAtomic()` both hardcoded
+`'utf8'`. For a Shift_JIS file whose match happens to sit in pure-ASCII content — the common shape,
+an `attachEvent` call with Japanese comments below it — the recipe's offsets still lined up, the
+edit applied, and the file was written back as UTF-8. Proof, from a probe against the running API:
+
+```
+before:  // <93 fa 96 7b ...>          (Shift_JIS for 日本語のコメント)
+after:   // ï¿½ï¿½ï¿½{ï¿½ï¿½ÌRï¿½ï¿½ï¿½ï¿½ï¿½g     (U+FFFD, re-encoded as UTF-8)
+execute ok: true
+```
+
+When the offsets *did* not line up, the failure was the opposite and just as misleading: the plan
+looked applicable and execution failed with "the matched call no longer exists at this position",
+which blames the file for the tool's own decode mismatch.
+
+Fixed by refusing, not by guessing: `preview()` blocks every finding in a file whose recorded
+encoding is not UTF-8, with a reason that says what to do. Rewriting the file in its original
+charset needs an encoder (`iconv-lite`), which is a dependency decision, not a bug fix — until
+then a refusal is the only behaviour that cannot lose data.
+
+The same decode bug was fixed in the two source viewers and in static validation, where a UTF-8
+read of a Shift_JIS file shifted every offset and made post-migration counts meaningless.
+
+### 20.2 Smaller defects fixed in the same pass
+
+- **File permissions were silently rewritten.** `writeFileAtomic` renamed a temp file over the
+  original, which replaces the inode; the "if the mode changed, write it again" repair was a no-op
+  because `writeFileSync` only applies `mode` when it *creates* a file. A 0600 or 0755 file came
+  back as 0644. Now the temp file is created with the original mode and `chmodSync` closes the gap.
+- **The UTF-8 BOM was dropped.** The decoder strips it, so writing the decoded text back removed it.
+  Harmless to a browser, a real change to the user's bytes. It is now carried through explicitly.
+- **The viewer showed mojibake for every legacy file.** Both `/files/source` and
+  `/findings/:id/source` returned `buffer.toString('utf8')` while reporting the detected encoding
+  in the response — the one place a user checks "did it read my file correctly".
+- **SSE never closed for a finished scan.** `subscribe()` returns a no-op when no runner exists, so
+  a completed scan's stream emitted one snapshot and then hung on heartbeat forever, costing one of
+  the browser's six connections per visit. It now sends `done` and ends.
+- **The SSE snapshot used the scanned count as the total**, the same denominator mistake already
+  fixed in the page: an interrupted scan read "48 of 48" again the moment the stream opened.
+- **Validation re-read every finding of the scan inside the per-file loop**, so 50 target files on a
+  20 000-finding scan meant a million row reads. Hoisted.
+
+### 20.3 What the review could not fix, and why
+
+- **CORS reflects any Origin and the server binds every interface.** `Access-Control-Allow-Origin`
+  echoes whatever the caller sends, `app.listen(port)` binds `*`, and there is no authentication —
+  while the UI footer says "local only". Any page the user visits can therefore create a project
+  pointing at `$HOME`, scan it, and read the sources back through the API. Narrowing this is a
+  product decision (loopback bind, allow-list of dev origins, optional token), so it is documented
+  rather than changed.
+- **The commit phase is not atomic with the database.** Files are written first and `migration_execution`
+  rows recorded afterwards; a database failure in between leaves edited files with no audit trail
+  and no rollback path through the UI (the backups exist on disk). Cheap to narrow, not cheap to
+  make exact.
+- **The HTTP layer has no tests at all.** 950 lines of routing, and every test calls the services
+  directly — which is exactly why the CORS, SSE and encoding bugs above lived in the server layer.
+
+Suite: 161 tests.

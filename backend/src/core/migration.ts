@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
   AnalysisFinding,
@@ -67,12 +67,12 @@ interface PreparedFile {
 /** Writes to a temp file in the same directory, then renames, preserving permissions. */
 function writeFileAtomic(absPath: string, content: string): void {
   const tempPath = `${absPath}.weblift-tmp-${Date.now()}`;
-  writeFileSync(tempPath, content, 'utf8');
-  const mode = statSync(absPath).mode;
+  const originalMode = statSync(absPath).mode & 0o7777;
+  writeFileSync(tempPath, content, { encoding: 'utf8', mode: originalMode });
   renameSync(tempPath, absPath);
-  if (statSync(absPath).mode !== mode) {
-    writeFileSync(absPath, content, { encoding: 'utf8', mode });
-  }
+  // rename() replaces the inode, so the target now carries the temp file's mode. Writing the
+  // content again would not fix that: writeFileSync only applies `mode` when it creates a file.
+  if ((statSync(absPath).mode & 0o7777) !== originalMode) chmodSync(absPath, originalMode);
 }
 
 function backupRoot(): string {
@@ -81,11 +81,38 @@ function backupRoot(): string {
   return dir;
 }
 
-function readTarget(rootPath: string, relPath: string): { absPath: string; text: string; hash: string } | null {
+interface TargetFile {
+  absPath: string;
+  text: string;
+  hash: string;
+  /** UTF-8 byte-order mark of the original, re-emitted on write so nothing else changes. */
+  bom: string;
+}
+
+/**
+ * Reads a project file the way the scan read it. Decoding with the recorded encoding keeps
+ * recipe offsets valid (they were computed against that text) and keeps the diff readable
+ * instead of full of U+FFFD. The hash still covers the raw bytes.
+ */
+function readTarget(rootPath: string, relPath: string, encoding: string | null | undefined): TargetFile | null {
   const absPath = resolveProjectPath(rootPath, relPath);
   if (!absPath || !existsSync(absPath)) return null;
   const buffer = readFileSync(absPath);
-  return { absPath, text: buffer.toString('utf8'), hash: sha256(buffer) };
+  const hasBom = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
+  const body = hasBom ? buffer.subarray(3) : buffer;
+  let text: string;
+  try {
+    text = new TextDecoder(encoding ?? 'utf-8', { fatal: false }).decode(body);
+  } catch {
+    text = body.toString('utf8');
+  }
+  return { absPath, text, hash: sha256(buffer), bom: hasBom ? '\uFEFF' : '' };
+}
+
+/** True when the bytes on disk can be written back without changing their encoding. */
+function isWritableEncoding(encoding: string | null | undefined): boolean {
+  const normalized = (encoding ?? 'utf-8').toLowerCase().replace(/[_\s]/g, '-');
+  return normalized === 'utf-8' || normalized === 'utf8';
 }
 
 /**
@@ -124,7 +151,8 @@ export class MigrationService {
     }
 
     for (const [filePath, fileFindings] of byFile) {
-      const target = readTarget(scan.rootPath, filePath);
+      const scannedFile = this.store.getScanFile(options.scanTaskId, filePath);
+      const target = readTarget(scan.rootPath, filePath, scannedFile?.encoding);
       if (!target) {
         for (const finding of fileFindings) {
           items.push(this.blockedItem(finding, 'File no longer exists on disk.', true));
@@ -132,7 +160,21 @@ export class MigrationService {
         continue;
       }
 
-      const scannedFile = this.store.getScanFile(options.scanTaskId, filePath);
+      // A file the tool cannot encode back is not a file it may rewrite. Reading it as UTF-8
+      // would turn every Shift_JIS / EUC-JP character into U+FFFD and writing it back would
+      // persist that loss, so the whole file is refused until the encoding is handled properly.
+      if (!isWritableEncoding(scannedFile?.encoding)) {
+        for (const finding of fileFindings) {
+          items.push(
+            this.blockedItem(
+              finding,
+              `This file is ${scannedFile?.encoding}, and rewriting it would re-encode the whole file as UTF-8 and destroy every non-ASCII character in it. Convert the file to UTF-8 first, then rescan.`,
+            ),
+          );
+        }
+        continue;
+      }
+
       const hashMatches = scannedFile ? scannedFile.hash === target.hash : false;
       if (!hashMatches) {
         warnings.push(
@@ -313,7 +355,7 @@ export class MigrationService {
 
     /* ---------------------------- phase 1: prepare ---------------------------- */
     for (const [filePath, items] of byFile) {
-      const target = readTarget(scan.rootPath, filePath);
+      const target = readTarget(scan.rootPath, filePath, this.store.getScanFile(scanTaskId, filePath)?.encoding);
       if (!target) {
         return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: 'File disappeared before execution.' }], warnings);
       }
@@ -358,7 +400,8 @@ export class MigrationService {
       prepared.push({
         filePath,
         absPath: target.absPath,
-        newText: afterText,
+        // The BOM is not part of the text the recipes reason about, but it is part of the file.
+        newText: target.bom + afterText,
         beforeHash: expectedHash,
         batchId,
         backupPath,

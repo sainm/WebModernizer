@@ -76,6 +76,10 @@ export class ValidationService {
       if (!enabled) disabledRules.add(ruleId);
     }
 
+    // Loaded once: asking the store for every finding of the scan inside the per-file loop
+    // turns a 50-file validation of a 20 000-finding scan into a million row reads.
+    const allFindings = this.store.listAllFindings(scanTaskId);
+
     for (const filePath of targets) {
       const absPath = resolveProjectPath(scan.rootPath, filePath);
       if (!absPath || !existsSync(absPath)) {
@@ -83,7 +87,15 @@ export class ValidationService {
         continue;
       }
       const buffer = readFileSync(absPath);
-      const text = buffer.toString('utf8');
+      // Decode the way the scan did; a UTF-8 read of a Shift_JIS file shifts every offset and
+      // makes the post-migration counts meaningless.
+      const encoding = this.store.getScanFile(scanTaskId, filePath)?.encoding;
+      let text: string;
+      try {
+        text = new TextDecoder(encoding ?? 'utf-8', { fatal: false }).decode(buffer);
+      } catch {
+        text = buffer.toString('utf8');
+      }
       const parsed = parseSourceFile(makeSourceFile(scan.rootPath, filePath, absPath, text));
       const current: AnalysisFinding[] = analyzeParsedFile(parsed, {
         scanTaskId,
@@ -96,7 +108,7 @@ export class ValidationService {
       }
 
       const fileExecutions = executions.filter((item) => item.filePath === filePath);
-      const baseline = this.store.listAllFindings(scanTaskId).filter((finding) => finding.filePath === filePath);
+      const baseline = allFindings.filter((finding) => finding.filePath === filePath);
 
       // One file usually holds several findings of the same rule (three attachEvent
       // calls, for instance). Validation therefore compares per-rule counts instead of

@@ -356,6 +356,8 @@ export interface Meta {
   statuses: FindingStatus[];
   languages: string[];
   defaultEncodings: string[];
+  /** Signature of the loaded rule + recipe set. */
+  ruleSignature: string;
 }
 
 export class ApiError extends Error {
@@ -400,6 +402,11 @@ export const api = {
     request<IgnoreRule>(`/projects/${projectId}/ignore-rules`, { method: 'POST', body: JSON.stringify(body) }),
   previewIgnoreRule: (projectId: string, body: { ruleId?: string | null; pathPattern?: string | null; scanTaskId?: string }) =>
     request<IgnoreImpact>(`/projects/${projectId}/ignore-rules/preview`, { method: 'POST', body: JSON.stringify(body) }),
+  applyScanRules: (scanId: string) =>
+    request<{ scanTaskId: string; ignored: number; disabled: number; unignored: number; unchanged: number }>(
+      `/scans/${scanId}/apply-rules`,
+      { method: 'POST', body: '{}' },
+    ),
   applyIgnoreRules: (projectId: string, scanTaskId?: string) =>
     request<{ scanTaskId: string; ignored: number; unignored: number; unchanged: number }>(
       `/projects/${projectId}/ignore-rules/apply`,

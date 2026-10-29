@@ -291,3 +291,70 @@ describe('applying rules to an existing scan', () => {
     expect(second.unchanged).toBe(first.unchanged + first.ignored);
   });
 });
+
+describe('disabled rules applied to an existing scan', () => {
+  async function scanOnly(): Promise<{ store: Store; scanId: string }> {
+    const dir = mkdtempSync(join(tmpdir(), 'weblift-ruleoff-'));
+    const projectDir = join(dir, 'legacy-app');
+    cpSync(exampleRoot, projectDir, { recursive: true });
+    const store = new Store({ dataDir: join(dir, 'data') });
+    harnesses.push({ dir, store });
+
+    const scans = new ScanManager(store);
+    const project = store.createProject('Rule Off', projectDir, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig());
+    scans.start(scan.id);
+    const started = Date.now();
+    while (Date.now() - started < 30000) {
+      const current = store.getScan(scan.id);
+      if (current && TERMINAL.includes(current.status)) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    return { store, scanId: scan.id };
+  }
+
+  it('silences findings of a rule that was switched off after the scan', async () => {
+    const { store, scanId } = await scanOnly();
+    store.setRuleEnabled('WL-CSS-005', false);
+
+    const result = applyIgnoreRules(store, scanId);
+    expect(result.disabled).toBeGreaterThan(0);
+
+    const silenced = store.listAllFindings(scanId).filter((f) => f.ruleId === 'WL-CSS-005');
+    expect(silenced.length).toBeGreaterThan(0);
+    for (const finding of silenced) {
+      expect(finding.status).toBe('IGNORED');
+      expect(finding.statusNote).toContain('Rule disabled after this scan');
+      expect(finding.statusNote).toContain('WL-CSS-005');
+    }
+
+    // Other rules keep reporting.
+    const others = store.listAllFindings(scanId).filter((f) => f.ruleId === 'WL-JS-001');
+    expect(others.every((f) => f.status !== 'IGNORED')).toBe(true);
+  });
+
+  it('restores them when the rule is switched back on', async () => {
+    const { store, scanId } = await scanOnly();
+    store.setRuleEnabled('WL-CSS-005', false);
+    applyIgnoreRules(store, scanId);
+
+    store.setRuleEnabled('WL-CSS-005', true);
+    const result = applyIgnoreRules(store, scanId);
+    expect(result.unignored).toBeGreaterThan(0);
+
+    const restored = store.listAllFindings(scanId).filter((f) => f.ruleId === 'WL-CSS-005');
+    expect(restored.every((f) => f.status !== 'IGNORED')).toBe(true);
+  });
+
+  it('leaves a manual ignore alone even when its rule is disabled', async () => {
+    const { store, scanId } = await scanOnly();
+    const manual = store.listAllFindings(scanId).find((f) => f.ruleId === 'WL-CSS-005')!;
+    store.updateFindingStatus(manual.id, 'IGNORED', 'user', 'accepted by a human');
+
+    store.setRuleEnabled('WL-CSS-005', false);
+    applyIgnoreRules(store, scanId);
+
+    const after = store.getFinding(manual.id)!;
+    expect(after.statusNote).toBe('accepted by a human');
+  });
+});

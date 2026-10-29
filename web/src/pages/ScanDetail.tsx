@@ -17,7 +17,10 @@ export default function ScanDetail() {
   const { scan: liveScan, progress, logs, live } = useScanStream(scanId ?? null, scan.data ?? null);
   const summary = useAsync<ScanSummary>(() => api.summary(scanId as string), [scanId, liveScan?.status]);
   const files = useAsync(() => api.scanFiles(scanId as string), [scanId]);
+  const meta = useAsync(() => api.meta(), []);
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [applying, setApplying] = useState(false);
+  const [applyNotice, setApplyNotice] = useState<string | null>(null);
 
   if (scan.loading) return <Loading />;
   if (scan.error) return <div className="page"><ErrorBox error={scan.error} onRetry={scan.reload} /></div>;
@@ -28,6 +31,24 @@ export default function ScanDetail() {
   const total = progress?.totalFiles ?? current.scannedFileCount;
   const done = progress?.scannedFiles ?? current.scannedFileCount;
   const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+
+  const rulesChanged = Boolean(
+    current.ruleSignature && meta.data?.ruleSignature && current.ruleSignature !== meta.data.ruleSignature,
+  );
+
+  const applyRules = async (): Promise<void> => {
+    setApplying(true);
+    try {
+      const result = await api.applyScanRules(current.id);
+      setApplyNotice(
+        t('scan.appliedRules', { ignored: result.ignored, disabled: result.disabled, restored: result.unignored }),
+      );
+      scan.reload();
+      summary.reload();
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const cancel = async (): Promise<void> => {
     if (!window.confirm(t('scans.cancelConfirm'))) return;
@@ -68,6 +89,18 @@ export default function ScanDetail() {
           </>
         }
       />
+
+      {rulesChanged ? (
+        <div className="callout warn" style={{ marginBottom: 14 }}>
+          <div className="row wrap">
+            <span className="grow">{t('scan.rulesChanged')}</span>
+            <button className="btn small" onClick={applyRules} disabled={applying}>
+              {applying ? <span className="spinner" /> : null} {t('scan.applyRules')}
+            </button>
+          </div>
+          {applyNotice ? <div className="hint" style={{ marginTop: 6 }}>{applyNotice}</div> : null}
+        </div>
+      ) : null}
 
       <div className="grid-2" style={{ marginBottom: 14 }}>
         <Card

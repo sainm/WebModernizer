@@ -80,6 +80,15 @@ export function findIgnoreMatch(
 /** Prefix that marks a status note as written by the ignore-rule engine. */
 export const IGNORE_NOTE_PREFIX = 'Ignored by project rule';
 
+/** Prefix for findings silenced because the rule that produced them is now disabled. */
+export const DISABLED_RULE_NOTE_PREFIX = 'Rule disabled after this scan';
+
+/** True when a status note was written by the engine (either reason), not by a human. */
+export function isEngineNote(note: string | undefined | null): boolean {
+  const text = note ?? '';
+  return text.startsWith(IGNORE_NOTE_PREFIX) || text.startsWith(DISABLED_RULE_NOTE_PREFIX);
+}
+
 export function ignoreNote(rule: IgnoreRuleScope, reason: string): string {
   return `${IGNORE_NOTE_PREFIX} (${describeIgnoreRule(rule)}): ${reason}`;
 }

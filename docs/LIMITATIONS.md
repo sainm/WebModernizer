@@ -34,6 +34,12 @@ those edges are labelled `INFERRED`, and why ambiguous names are `UNKNOWN` rathe
 
 ## Migration
 
+**Disabling a rule is not retroactive by itself.** The toggle affects new scans only; an existing
+scan keeps its findings until someone re-evaluates it, which the scan page offers as a one-click
+action when it notices the rule signature no longer matches. Re-evaluation silences findings of
+disabled rules with a note and restores them when the rule comes back, but it cannot *add* findings
+that a newly enabled rule would produce — that needs a rescan.
+
 **Ignore rules match rule + path, not code identity.** A rule silences "this rule in these files",
 which is right for accepted technical debt, but it cannot say "just this one occurrence" — use the
 per-finding ignore for that. Rules apply at scan time, so earlier scans keep their original

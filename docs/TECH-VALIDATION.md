@@ -531,3 +531,36 @@ rescan → `resolved: 3, added: 0, unchanged: 96, 99 → 96`, two changed files,
 message and a link back to the finding.
 
 Suite: 142 tests (8 new for the comparator: line shift, reformat, multiplicity, roll-ups).
+
+---
+
+## 15. Eleventh increment — rule state applied to stored scans
+
+Ignore rules already had a retro-apply path; rule enable/disable did not, so switching off a noisy
+rule left a thousand findings on screen until the next scan. Both now share one routine:
+`applyIgnoreRules(store, scanId)` first checks ignore rules, then checks whether the finding's rule
+is disabled.
+
+Two notes, deliberately distinct, so a reader can tell why a finding is silent:
+
+- `Ignored by project rule (WL-CSS-004 · css/**): <reason>`
+- `Rule disabled after this scan (WL-CSS-005); re-enable the rule to see it again.`
+
+Restoration accepts either note, and never touches a note written by a human. A manual ignore on a
+finding whose rule is later disabled therefore stays exactly as the person left it.
+
+Measured over HTTP on the fixture:
+
+| Step | Result |
+| --- | --- |
+| scan | 5 findings of `WL-CSS-005`, 0 ignored |
+| disable the rule, apply | `disabled: 5` — all five now carry the "rule disabled" note |
+| re-enable, apply | `unignored: 5` — back to 0 ignored |
+
+The UI does not mutate anything on toggle. Instead `GET /api/meta` exposes the current rule
+signature, and a scan whose stored signature differs shows a banner: "the rule set changed after
+this scan" with a one-click re-evaluation. That keeps the toggle honest (no silent rewriting of
+history) while making the mismatch impossible to miss.
+
+Limitation worth stating in the UI copy: re-evaluation can only *remove* findings, never add the ones
+a newly enabled rule would produce. That still requires a rescan.

@@ -116,6 +116,8 @@ export function createServer(store: Store): ServerContext {
       statuses: ['DETECTED', 'READY_FOR_MIGRATION', 'MIGRATED', 'REVIEW_REQUIRED', 'VALIDATED', 'VALIDATION_FAILED', 'IGNORED'],
       languages: ['javascript', 'html', 'css', 'jsp'],
       defaultEncodings: defaultProjectConfig().encodingCandidates,
+      // Lets the UI tell whether a stored scan used the rule set that is loaded now.
+      ruleSignature: ruleSignature(),
     });
   });
 
@@ -281,6 +283,16 @@ export function createServer(store: Store): ServerContext {
       enabled: true,
     });
     res.json({ scanTaskId: scan.id, ...impact });
+  });
+
+  /** Re-evaluate one scan against the current ignore rules and rule enable state. */
+  app.post('/api/scans/:id/apply-rules', (req, res) => {
+    const scan = store.getScan(req.params.id);
+    if (!scan) {
+      res.status(404).json({ error: 'scan not found' });
+      return;
+    }
+    res.json(applyIgnoreRules(store, scan.id));
   });
 
   /** Re-evaluate the stored findings of one scan against the current rules. */

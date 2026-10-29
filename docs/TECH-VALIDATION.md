@@ -627,3 +627,29 @@ Two real defects surfaced, neither of which the fixture could show:
    translates": all of them are English now, and a `\p{Han}` sweep over `backend/src` returns zero
    matches. The UI stopped using `summary.byCategory[].label` and translates the category key
    itself, which is what it was already doing everywhere else.
+
+---
+
+## 18. Fourteenth increment — turning the stress findings into guards
+
+The hostile corpus found two defects; finding them once is worth little if the next parser change
+brings them back. `backend/test/stress.test.ts` now generates the corpus into a temp directory
+(six modules instead of forty, to keep the suite fast), scans it, and asserts the properties that
+actually matter:
+
+- no hard parse errors and no failed files across the corpus;
+- **no `.jspf` file is reported as missing a doctype** (the exact 44-fake-problems regression);
+- the hand-encoded Shift_JIS file is `shift_jis` and its finding is at line 3, column 3;
+- minified, BOM, CRLF and 40-level-nested sources produce zero problems;
+- malformed HTML recovers and still yields findings with locations;
+- every finding in a 5 000+ result set has a non-zero line/column and non-empty evidence.
+
+A second guard covers the language leak: a test walks `backend/src` and fails on any Han character.
+That is the only way this stays true — a stray Chinese label is invisible until an English report
+renders it.
+
+**The guard was verified by mutation**, not assumed: removing the `isFragment` check makes exactly
+one test fail (`does not report include fragments as missing a doctype`), and restoring it returns
+the suite to green. A regression test that has never failed is a hypothesis.
+
+Suite: 153 tests.

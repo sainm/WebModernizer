@@ -6,14 +6,13 @@
 //   node scripts/gen-stress-project.mjs <output-dir> [module-count]
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const outDir = process.argv[2] ?? '/tmp/weblift-stress';
-const moduleCount = Number(process.argv[3] ?? 40);
-
+export function generateStressProject(outDir, moduleCount = 40) {
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-function write(relPath, content, encoding = 'utf8') {
+function write(relPath, content) {
   const full = join(outDir, relPath);
   mkdirSync(join(full, '..'), { recursive: true });
   writeFileSync(full, content);
@@ -175,5 +174,12 @@ write('static/one-line.html', `<html><body>${'<div class="x">段</div>'.repeat(4
 
 write('README.md', '# stress project\n');
 
-const total = 4 + moduleCount * 2 + 3 + 1 + 1 + 2 + 1 + 3 + 3 + 1;
-console.log(`generated ${outDir} (about ${total} files, ${moduleCount} modules)`);
+return { outDir, moduleCount };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const outDir = process.argv[2] ?? '/tmp/weblift-stress';
+  const moduleCount = Number(process.argv[3] ?? 40);
+  const result = generateStressProject(outDir, moduleCount);
+  console.log(`generated ${result.outDir} (${result.moduleCount} modules)`);
+}

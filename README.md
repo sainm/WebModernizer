@@ -62,7 +62,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 146 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 153 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, diff, recipes, batching, storage upgrade, visual diff,
                 #            ignore rules, incremental reuse
 ```

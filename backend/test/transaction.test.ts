@@ -164,3 +164,59 @@ describe('multi-file migration transactions', () => {
     expect(readFileSync(cssPath, 'utf8')).toContain('hand edited after migration');
   });
 });
+
+describe('plan binding between preview and execute', () => {
+  it('executes exactly the plan that was previewed', async () => {
+    const h = await setup();
+    const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
+    const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
+
+    const plan = h.service.preview({ scanTaskId: h.scanId, findingIds: [cssFinding.id, jsFinding.id] });
+    expect(plan.planHash).toMatch(/^[0-9a-f]{16,}$/);
+
+    const result = await h.service.execute(
+      h.scanId,
+      [cssFinding.id, jsFinding.id],
+      { expectedPlanHash: plan.planHash },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.planHash).toBe(plan.planHash);
+    expect(result.executions).toHaveLength(2);
+  });
+
+  it('digests the same tree to the same hash, and a changed tree to a different one', async () => {
+    const h = await setup();
+    const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
+    const first = h.service.preview({ scanTaskId: h.scanId, findingIds: [cssFinding.id] });
+    const second = h.service.preview({ scanTaskId: h.scanId, findingIds: [cssFinding.id] });
+    expect(second.planHash).toBe(first.planHash);
+
+    // A different finding set is a different plan.
+    const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
+    const wider = h.service.preview({ scanTaskId: h.scanId, findingIds: [cssFinding.id, jsFinding.id] });
+    expect(wider.planHash).not.toBe(first.planHash);
+  });
+
+  it('refuses to apply a plan that no longer matches what was reviewed', async () => {
+    const h = await setup();
+    const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
+    const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
+    const cssBefore = readFileSync(join(h.projectDir, CSS_FILE), 'utf8');
+
+    // Preview one finding, then try to apply the plan while asking for two.
+    const plan = h.service.preview({ scanTaskId: h.scanId, findingIds: [cssFinding.id] });
+    const result = await h.service.execute(
+      h.scanId,
+      [cssFinding.id, jsFinding.id],
+      { expectedPlanHash: plan.planHash },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.aborted).toBe(true);
+    expect(result.executions).toHaveLength(0);
+    expect(result.failures[0].reason).toContain('plan changed');
+    // Nothing on disk, and nothing recorded.
+    expect(readFileSync(join(h.projectDir, CSS_FILE), 'utf8')).toBe(cssBefore);
+    expect(h.store.listMigrations(h.scanId)).toHaveLength(0);
+  });
+});

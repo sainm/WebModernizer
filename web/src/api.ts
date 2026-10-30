@@ -203,6 +203,8 @@ export interface MigrationPlan {
   planId: string;
   projectId: string;
   scanTaskId: string;
+  /** Echoed back on execute: the server refuses to apply a plan that no longer matches. */
+  planHash: string;
   items: PlanItem[];
   warnings: string[];
 }
@@ -470,11 +472,20 @@ export const api = {
   execute: (
     scanTaskId: string,
     findingIds: string[],
-    visual?: { pages: Array<{ pageKey: string; url: string }>; maskSelectors?: string[] },
+    options?: {
+      visual?: { pages: Array<{ pageKey: string; url: string }>; maskSelectors?: string[] };
+      /** The planHash of the preview the user confirmed. */
+      planHash?: string;
+    },
   ) =>
     request<ExecuteResult>('/migrations/execute', {
       method: 'POST',
-      body: JSON.stringify({ scanTaskId, findingIds, ...(visual ? { visual } : {}) }),
+      body: JSON.stringify({
+        scanTaskId,
+        findingIds,
+        ...(options?.visual ? { visual: options.visual } : {}),
+        ...(options?.planHash ? { planHash: options.planHash } : {}),
+      }),
     }),
   rollback: (executionId: string) => request<RollbackResult>(`/migrations/${executionId}/rollback`, { method: 'POST' }),
   rollbackBatch: (batchId: string) => request<RollbackResult>(`/migrations/batch/${batchId}/rollback`, { method: 'POST' }),

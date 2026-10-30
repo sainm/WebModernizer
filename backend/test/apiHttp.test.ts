@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,11 +37,16 @@ beforeAll(async () => {
   if (!address || typeof address !== 'object') throw new Error('server did not bind');
   base = `http://127.0.0.1:${address.port}`;
 
+  // A copy, not the fixture itself: these tests may apply a migration, and the repository must
+  // not be the thing under the write head.
+  const projectDir = join(dir, 'legacy-app');
+  cpSync(exampleRoot, projectDir, { recursive: true });
+
   const project = await json<{ id: string }>(
     await fetch(`${base}/api/projects`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'HTTP test', rootPath: exampleRoot }),
+      body: JSON.stringify({ name: 'HTTP test', rootPath: projectDir }),
     }),
   );
   const scan = await json<{ id: string }>(await fetch(`${base}/api/projects/${project.id}/scans`, { method: 'POST' }));
@@ -147,5 +152,50 @@ describe('scan event stream', () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('done');
     expect(events[0].status).toBe('COMPLETED');
+  });
+});
+
+describe('migration plan binding over http', () => {
+  it('applies the previewed plan, and refuses one that was tampered with', async () => {
+    const findings = await json<{ items: Array<{ id: string; migrationLevel: string }> }>(
+      await fetch(`${base}/api/scans/${scanId}/findings?limit=500`),
+    );
+    const candidate = findings.items.find(
+      (finding) => finding.migrationLevel === 'SAFE' || finding.migrationLevel === 'CONDITIONAL',
+    );
+    expect(candidate).toBeDefined();
+
+    const plan = await json<{ planHash: string; items: Array<{ applicable: boolean }> }>(
+      await fetch(`${base}/api/migrations/preview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scanTaskId: scanId, findingIds: [candidate?.id] }),
+      }),
+    );
+    expect(plan.planHash).toBeTruthy();
+    expect(plan.items[0].applicable).toBe(true);
+
+    // A hash that no plan can produce must be refused, and must write nothing.
+    const tampered = await fetch(`${base}/api/migrations/execute`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scanTaskId: scanId, findingIds: [candidate?.id], planHash: 'not-the-plan' }),
+    });
+    expect(tampered.status).toBe(207);
+    const tamperedBody = (await tampered.json()) as { aborted: boolean; failures: Array<{ reason: string }> };
+    expect(tamperedBody.aborted).toBe(true);
+    expect(tamperedBody.failures[0].reason).toContain('plan changed');
+
+    // The confirmed hash goes through.
+    const applied = await json<{ ok: boolean; planHash: string; executions: unknown[] }>(
+      await fetch(`${base}/api/migrations/execute`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scanTaskId: scanId, findingIds: [candidate?.id], planHash: plan.planHash }),
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    expect(applied.planHash).toBe(plan.planHash);
+    expect(applied.executions).toHaveLength(1);
   });
 });

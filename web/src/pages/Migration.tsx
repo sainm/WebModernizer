@@ -88,27 +88,38 @@ export default function Migration() {
 
   const execute = async (): Promise<void> => {
     if (!scanId || selected.size === 0) return;
+    // The preview described a specific set of findings. Executing is only allowed against that
+    // same plan; the server checks the digest too, this just fails faster and in the user's language.
+    if (plan) {
+      const planned = new Set(plan.items.map((item) => item.findingId));
+      const sameSet = planned.size === selected.size && [...selected].every((id) => planned.has(id));
+      if (!sameSet) {
+        toast(t('migration.previewStale'));
+        return;
+      }
+    }
     if (!window.confirm(t('migration.confirmExecute'))) return;
     setBusy(true);
     try {
       const wantedVisual = compareDuringExecute && visualUrl.trim().length > 0;
-      const result = await api.execute(
-        scanId,
-        [...selected],
-        wantedVisual
+      const result = await api.execute(scanId, [...selected], {
+        planHash: plan?.planHash,
+        ...(wantedVisual
           ? {
-              pages: [{ pageKey: visualKey.trim() || 'page', url: visualUrl.trim() }],
-              maskSelectors: maskInput
-                .split(',')
-                .map((selector) => selector.trim())
-                .filter(Boolean),
+              visual: {
+                pages: [{ pageKey: visualKey.trim() || 'page', url: visualUrl.trim() }],
+                maskSelectors: maskInput
+                  .split(',')
+                  .map((selector) => selector.trim())
+                  .filter(Boolean),
+              },
             }
-          : undefined,
-      );
+          : {}),
+      });
       setLastVisual(result.visual ?? []);
       toast(
         result.aborted
-          ? t('migration.aborted')
+          ? `${t('migration.aborted')} ${result.failures[0]?.reason ?? ''}`.trim()
           : result.ok
             ? `${t('migration.applied')}: ${result.executions.length}`
             : `${t('migration.failures')}: ${result.failures.length}`,

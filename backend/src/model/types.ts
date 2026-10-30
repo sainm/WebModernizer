@@ -296,6 +296,11 @@ export interface MigrationPlan {
   planId: string;
   projectId: string;
   scanTaskId: string;
+  /**
+   * Digest of exactly what this plan would do. The client echoes it back on execute, so the
+   * transformations applied are the ones that were reviewed — not a fresh set computed later.
+   */
+  planHash: string;
   items: MigrationPlanItem[];
   warnings: string[];
 }

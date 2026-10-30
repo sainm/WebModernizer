@@ -832,3 +832,46 @@ other suite calls the services directly:
 - a finished scan's event stream is one `done` event and then closes, measured under 2 s.
 
 Suite: 169 tests.
+
+---
+
+## 22. Eighteenth increment — executing the plan that was reviewed
+
+`execute(scanTaskId, findingIds)` recomputed the plan from scratch. The diff the user confirmed was
+therefore a *description* of an earlier computation, not the thing being applied: between the two
+calls the selection could differ, a finding's status could have been changed by an ignore rule, or
+the overlap decisions in a shared file could come out differently. Each of those changes the
+transformation while leaving the file hash identical, so the hash check did not cover it.
+
+**The plan now carries a digest of itself.** `MigrationPlan.planHash` is a SHA-256 over the scan id
+and, for every item, the finding id, rule, recipe, level, applicability, the file hash at preview
+time, the blocked reasons and the exact edit ranges and replacement text. Sorted by finding id, so
+two previews of an untouched tree agree — which is the property the whole mechanism rests on.
+
+`execute` accepts `expectedPlanHash`, recomputes the plan, and refuses with a 207 and
+"the plan changed after it was previewed" if the digest moved. Everything else about the
+transaction is unchanged: it still aborts before any write, and still returns the digest it applied
+(`ExecuteResult.planHash`) so the audit trail records what actually ran.
+
+Omitting the hash keeps the old behaviour, which is what the existing tests and the CLI rely on —
+the guarantee is opt-in at the protocol level and *always* sent by the UI.
+
+### Tests
+
+Three service-level tests and one over HTTP:
+
+- preview → execute with the confirmed digest applies both files;
+- two previews of the same tree agree, a different finding set does not;
+- preview one finding, execute two with the first plan's digest → aborted, file untouched, no
+  `migration_execution` row written;
+- the same over HTTP, including a hand-made `planHash` that no plan could produce.
+
+The HTTP test also revealed a bad habit worth naming: it had been pointing the project at
+`examples/legacy-app` itself, so a wiring bug would have written into the repository. It now copies
+the fixture into the temp directory first.
+
+**Mutation-verified twice.** Removing the digest comparison fails both the service test and the HTTP
+test; removing only the server's pass-through fails the HTTP test with `expected 200 to be 207` —
+i.e. without the wiring, a tampered plan would have been applied.
+
+Suite: 173 tests.

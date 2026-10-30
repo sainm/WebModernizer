@@ -180,9 +180,15 @@ detected and that findings inside it land on the correct line.
 ## Security posture
 
 - Scanning is read-only; project JavaScript is never executed, build scripts are never run.
+- The API binds `127.0.0.1` and grants CORS to loopback origins only; there is no authentication, so
+  exposing it (`WEBLIFT_HOST=0.0.0.0`) is a deliberate act. Writes from a foreign `Origin` are refused.
 - Every path is resolved and checked against the project root; symlinks are never followed.
 - Source viewing is limited to files that belong to the scan being viewed.
 - Migration creates a hash-verified backup under `data/backups/<executionId>/` before writing.
+- Migration applies the plan that was previewed: the client echoes the plan's digest and the server
+  refuses anything that no longer matches, instead of recomputing a fresh set of edits.
+- A file whose detected encoding is not UTF-8 is never rewritten — doing so would re-encode the
+  whole file; convert it first.
 - Deleting a project removes the database record only, never the source tree.
 - Rollback refuses to run when the file changed after the migration (that would discard newer edits).
 

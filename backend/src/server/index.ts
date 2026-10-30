@@ -789,6 +789,7 @@ export function createServer(store: Store): ServerContext {
       const body = req.body as {
         scanTaskId?: string;
         findingIds?: string[];
+        planHash?: string;
         visual?: { pages?: Array<{ pageKey?: string; url?: string }>; maskSelectors?: string[] };
       };
       if (!body.scanTaskId || !Array.isArray(body.findingIds) || body.findingIds.length === 0) {
@@ -804,11 +805,13 @@ export function createServer(store: Store): ServerContext {
         .map((page, index) => ({ pageKey: page.pageKey?.trim() || `page-${index + 1}`, url: page.url as string }));
       const maskSelectors = (body.visual?.maskSelectors ?? []).map((selector) => selector.trim()).filter(Boolean);
 
-      const result = await migrations.execute(
-        body.scanTaskId,
-        body.findingIds,
-        pages.length > 0 ? { visual: { pages, capture: (url: string) => validation.captureScreenshot(url, 1280, 900, maskSelectors) } } : {},
-      );
+      const result = await migrations.execute(body.scanTaskId, body.findingIds, {
+        ...(pages.length > 0
+          ? { visual: { pages, capture: (url: string) => validation.captureScreenshot(url, 1280, 900, maskSelectors) } }
+          : {}),
+        // Echoed back by the client so the applied transformations are the reviewed ones.
+        ...(typeof body.planHash === 'string' && body.planHash ? { expectedPlanHash: body.planHash } : {}),
+      });
       res.status(result.ok ? 200 : 207).json(result);
     }),
   );

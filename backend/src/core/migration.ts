@@ -38,6 +38,11 @@ export interface ExecuteOptions {
    * prepared but before anything is written, so "before" really is the pre-migration page.
    */
   visual?: { pages: VisualPage[]; capture: VisualCapture['capture'] };
+  /**
+   * The `planHash` of the preview the user confirmed. When present, execution recomputes the plan
+   * and refuses if it no longer matches; without it, execute trusts whatever it computes now.
+   */
+  expectedPlanHash?: string;
 }
 
 export interface ExecuteResult {
@@ -51,6 +56,8 @@ export interface ExecuteResult {
   aborted: boolean;
   /** Before/after comparison, only when the caller asked for it. */
   visual: MigrationVisualResult[];
+  /** Digest of the plan that was actually executed, for the audit trail. */
+  planHash: string;
 }
 
 /** A file whose edits are computed and verified but not yet on disk. */
@@ -113,6 +120,29 @@ function readTarget(rootPath: string, relPath: string, encoding: string | null |
 function isWritableEncoding(encoding: string | null | undefined): boolean {
   const normalized = (encoding ?? 'utf-8').toLowerCase().replace(/[_\s]/g, '-');
   return normalized === 'utf-8' || normalized === 'utf8';
+}
+
+/**
+ * Digest of everything a plan would do to the project. Two previews of the same untouched tree
+ * produce the same digest, which is what lets execute() prove it is applying what was reviewed:
+ * the file hashes, the recipes chosen, and the exact edit ranges and replacement text.
+ */
+function planDigest(scanTaskId: string, items: MigrationPlanItem[]): string {
+  const rows = [...items]
+    .sort((a, b) => (a.findingId < b.findingId ? -1 : a.findingId > b.findingId ? 1 : 0))
+    .map((item) =>
+      [
+        item.findingId,
+        item.ruleId,
+        item.recipeId,
+        item.migrationLevel,
+        item.applicable ? '1' : '0',
+        item.fileHashAtPreview,
+        item.blockedReasons.join(';'),
+        item.edits.map((edit) => `${edit.start}:${edit.end}:${edit.newText}`).join('|'),
+      ].join('\u0000'),
+    );
+  return sha256([scanTaskId, ...rows].join('\u0001'));
 }
 
 /**
@@ -276,6 +306,7 @@ export class MigrationService {
       planId: newId('plan'),
       projectId: scan.projectId,
       scanTaskId: options.scanTaskId,
+      planHash: planDigest(options.scanTaskId, items),
       items,
       warnings,
     };
@@ -322,11 +353,27 @@ export class MigrationService {
     const scan = this.store.getScan(scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${scanTaskId}`);
 
-    const plan = this.preview({ scanTaskId, findingIds });
     const sessionId = newId('ses');
+    const plan = this.preview({ scanTaskId, findingIds });
     const skipped: ExecuteResult['failures'] = [];
     const prepared: PreparedFile[] = [];
     const warnings = [...plan.warnings];
+
+    // The plan the caller reviewed must still be the plan this call would apply. Without this,
+    // "confirm the diff" only described an earlier computation: the selection, the recipes or the
+    // overlap decisions could all have moved on, and the write would silently differ.
+    if (options.expectedPlanHash && options.expectedPlanHash !== plan.planHash) {
+      return this.abort(
+        sessionId,
+        plan.items.map((item) => ({
+          findingId: item.findingId,
+          filePath: item.filePath,
+          reason: 'The plan changed after it was previewed, so nothing was written. Preview again and confirm the new diff.',
+        })),
+        warnings,
+        plan.planHash,
+      );
+    }
 
     const stale = plan.items.filter((item) => item.staleFile);
     if (stale.length > 0) {
@@ -339,6 +386,7 @@ export class MigrationService {
           reason: 'The file changed after the scan; re-run the scan and preview again before applying.',
         })),
         warnings,
+        plan.planHash,
       );
     }
 
@@ -357,7 +405,7 @@ export class MigrationService {
     for (const [filePath, items] of byFile) {
       const target = readTarget(scan.rootPath, filePath, this.store.getScanFile(scanTaskId, filePath)?.encoding);
       if (!target) {
-        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: 'File disappeared before execution.' }], warnings);
+        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: 'File disappeared before execution.' }], warnings, plan.planHash);
       }
 
       const expectedHash = items[0].fileHashAtPreview;
@@ -375,7 +423,7 @@ export class MigrationService {
       mkdirSync(dirname(backupPath), { recursive: true });
       copyFileSync(target.absPath, backupPath);
       if (sha256(readFileSync(backupPath)) !== expectedHash) {
-        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: 'Backup verification failed.' }], warnings);
+        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: 'Backup verification failed.' }], warnings, plan.planHash);
       }
 
       const edits: TextEdit[] = items.flatMap((item) => item.edits);
@@ -383,7 +431,7 @@ export class MigrationService {
       try {
         afterText = applyEdits(target.text, edits);
       } catch (err) {
-        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: (err as Error).message }], warnings);
+        return this.abort(sessionId, [{ findingId: items[0].findingId, filePath, reason: (err as Error).message }], warnings, plan.planHash);
       }
 
       // Syntax gate: a transformation that breaks parsing is rejected before any write.
@@ -394,6 +442,7 @@ export class MigrationService {
           sessionId,
           [{ findingId: items[0].findingId, filePath, reason: `Transformation rejected: result does not parse (${hardErrors[0].message}).` }],
           warnings,
+          plan.planHash,
         );
       }
 
@@ -410,7 +459,7 @@ export class MigrationService {
     }
 
     if (prepared.length === 0) {
-      return { ok: false, executions: [], failures: skipped, warnings, sessionId, aborted: true, visual: [] };
+      return { ok: false, executions: [], failures: skipped, warnings, sessionId, aborted: true, visual: [], planHash: plan.planHash };
     }
 
     /* ------------------- optional: capture the pages before writing ------------------- */
@@ -453,6 +502,7 @@ export class MigrationService {
             },
           ],
           warnings,
+          plan.planHash,
         );
       }
     }
@@ -491,11 +541,16 @@ export class MigrationService {
 
     const visual = await this.compareAfterMigration(scanTaskId, visualPages, beforeShots, options.visual?.capture, warnings);
 
-    return { ok: true, executions, failures: skipped, warnings, sessionId, aborted: false, visual };
+    return { ok: true, executions, failures: skipped, warnings, sessionId, aborted: false, visual, planHash: plan.planHash };
   }
 
   /** Aborts a transaction: nothing has been written, so only the reason is reported. */
-  private abort(sessionId: string, failures: ExecuteResult['failures'], warnings: string[]): ExecuteResult {
+  private abort(
+    sessionId: string,
+    failures: ExecuteResult['failures'],
+    warnings: string[],
+    planHash = '',
+  ): ExecuteResult {
     return {
       ok: false,
       executions: [],
@@ -504,6 +559,7 @@ export class MigrationService {
       sessionId,
       aborted: true,
       visual: [],
+      planHash,
     };
   }
 

@@ -16,6 +16,12 @@ port can scan any directory that user can read, read the sources back, and apply
 copied to `backups/<executionId>/<path>` and hash-verified before the write, and rollback refuses if
 the file drifted since. Deleting the data directory therefore deletes the only backup the tool made.
 
+**A transaction is claimed in the database before it touches the disk.** If the process is killed
+between the write and its confirmation, the row stays `PENDING` and the history shows it as
+interrupted; rolling it back either restores the backup or, when the file still matches its original
+hash, records that nothing was written. What this cannot survive is the death of the process *before*
+the claim, or a disk that loses the file after a successful write.
+
 ## Analysis
 
 **Only the implemented pattern set is detected.** 42 rules cover the IE features listed in the

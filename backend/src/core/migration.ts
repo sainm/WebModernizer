@@ -475,6 +475,54 @@ export class MigrationService {
       }
     }
 
+    /* ------------------- claim the transaction before touching the disk ------------------- */
+    // The database records what is about to happen before it happens. If the process dies between
+    // the write and the confirmation below, these PENDING rows are the only thing that can tell a
+    // half-finished migration from one that never started: each carries the backup path and both
+    // hashes, so rollback can decide from the file itself.
+    const claimed: MigrationExecution[] = [];
+    const claimedByFile = new Map<string, MigrationExecution[]>();
+    try {
+      for (const file of prepared) {
+        const afterHash = sha256(file.newText);
+        const rows: MigrationExecution[] = [];
+        for (const item of file.items) {
+          const execution: MigrationExecution = {
+            id: newId('exe'),
+            projectId: scan.projectId,
+            scanTaskId,
+            ruleId: item.ruleId,
+            findingId: item.findingId,
+            filePath: file.filePath,
+            beforeHash: file.beforeHash,
+            afterHash,
+            diff: item.unifiedDiff,
+            executionStatus: 'PENDING',
+            validationStatus: 'PENDING',
+            executedAt: nowIso(),
+            rolledBackAt: null,
+            backupPath: file.backupPath,
+            note: [item.recipeId, ...item.blockedReasons].filter(Boolean).join(' | '),
+            batchId: file.batchId,
+            sessionId,
+          };
+          this.store.insertMigration(execution);
+          rows.push(execution);
+          claimed.push(execution);
+        }
+        claimedByFile.set(file.filePath, rows);
+      }
+    } catch (err) {
+      // Nothing has been written yet, so the claims describe work that will not happen.
+      for (const row of claimed) this.store.deleteMigration(row.id);
+      return this.abort(
+        sessionId,
+        [{ findingId: '', filePath: '', reason: `Could not record the transaction, so nothing was written: ${(err as Error).message}` }],
+        warnings,
+        plan.planHash,
+      );
+    }
+
     /* ---------------------------- phase 2: commit ---------------------------- */
     const written: PreparedFile[] = [];
     for (const file of prepared) {
@@ -484,13 +532,27 @@ export class MigrationService {
       } catch (err) {
         // Compensate in reverse order: the transaction must leave no half-applied state.
         const reverted: string[] = [];
+        const stuck: string[] = [];
         for (const done of [...written].reverse()) {
           try {
             copyFileSync(done.backupPath, done.absPath);
             reverted.push(done.filePath);
           } catch {
-            // Reported below; the backup still exists on disk for manual recovery.
+            stuck.push(done.filePath);
           }
+        }
+        // A claim exists to describe a difference on disk. Once every file is back to its original
+        // bytes — including the one that never got written — there is nothing left to claim.
+        for (const file of prepared) {
+          if (stuck.includes(file.filePath)) continue;
+          let currentHash = '';
+          try {
+            currentHash = sha256(readFileSync(file.absPath));
+          } catch {
+            currentHash = '';
+          }
+          if (currentHash !== file.beforeHash) continue;
+          for (const row of claimedByFile.get(file.filePath) ?? []) this.store.deleteMigration(row.id);
         }
         return this.abort(
           sessionId,
@@ -498,7 +560,11 @@ export class MigrationService {
             {
               findingId: file.items[0].findingId,
               filePath: file.filePath,
-              reason: `Write failed (${(err as Error).message}). Reverted: ${reverted.join(', ') || 'nothing needed reverting'}.`,
+              reason:
+                `Write failed (${(err as Error).message}). Reverted: ${reverted.join(', ') || 'nothing needed reverting'}.` +
+                (stuck.length > 0
+                  ? ` Could not revert: ${stuck.join(', ')} — these are recorded as pending and can be rolled back.`
+                  : ''),
             },
           ],
           warnings,
@@ -507,33 +573,15 @@ export class MigrationService {
       }
     }
 
-    /* ---------------------------- record results ---------------------------- */
+    /* ---------------------------- confirm results ---------------------------- */
     const executions: MigrationExecution[] = [];
     for (const file of written) {
-      const afterHash = sha256(readFileSync(file.absPath));
       for (const item of file.items) {
-        const execution: MigrationExecution = {
-          id: newId('exe'),
-          projectId: scan.projectId,
-          scanTaskId,
-          ruleId: item.ruleId,
-          findingId: item.findingId,
-          filePath: file.filePath,
-          beforeHash: file.beforeHash,
-          afterHash,
-          diff: item.unifiedDiff,
-          executionStatus: 'APPLIED',
-          validationStatus: 'PENDING',
-          executedAt: nowIso(),
-          rolledBackAt: null,
-          backupPath: file.backupPath,
-          note: [item.recipeId, ...item.blockedReasons].filter(Boolean).join(' | '),
-          batchId: file.batchId,
-          sessionId,
-        };
-        this.store.insertMigration(execution);
+        const execution = (claimedByFile.get(file.filePath) ?? []).find((row) => row.findingId === item.findingId);
+        if (!execution) continue;
+        this.store.updateMigration(execution.id, { executionStatus: 'APPLIED' });
         this.store.updateFindingStatus(item.findingId, 'MIGRATED', 'system:migration', `Applied ${item.recipeId}`);
-        executions.push(execution);
+        executions.push({ ...execution, executionStatus: 'APPLIED' });
       }
     }
 
@@ -679,7 +727,10 @@ export class MigrationService {
     groupId: string | null,
     scope: 'batch' | 'session',
   ): RollbackResult {
-    const active = rows.filter((row) => row.executionStatus === 'APPLIED');
+    // PENDING rows are transactions that claimed a file but never confirmed the write. They may or
+    // may not have reached the disk — the file's own hash decides below — but either way this is
+    // the rollback that has to handle them.
+    const active = rows.filter((row) => row.executionStatus === 'APPLIED' || row.executionStatus === 'PENDING');
     if (active.length === 0) {
       return { ok: false, reason: 'Already rolled back', affectedFindings: 0, batchId: groupId, sessionId: groupId };
     }
@@ -694,7 +745,7 @@ export class MigrationService {
     }
 
     // Verify everything first: a partially restored transaction is worse than a refusal.
-    const restores: Array<{ target: string; backupPath: string }> = [];
+    const restores: Array<{ target: string; backupPath: string; needed: boolean }> = [];
     for (const [key, batchRows] of batches) {
       const first = batchRows[0];
       if (!existsSync(first.backupPath)) {
@@ -708,6 +759,12 @@ export class MigrationService {
 
       const currentHash = existsSync(target) ? sha256(readFileSync(target)) : '';
       if (currentHash && currentHash !== first.afterHash) {
+        // A write that never landed leaves the file exactly as it was. That is recoverable: there
+        // is nothing to restore, only a claim to clear. Anything else is drift.
+        if (currentHash === first.beforeHash && batchRows.every((row) => row.executionStatus === 'PENDING')) {
+          restores.push({ target, backupPath: first.backupPath, needed: false });
+          continue;
+        }
         return {
           ok: false,
           reason: `${first.filePath} changed after the migration; rolling back would discard newer edits. Restore from version control instead.`,
@@ -716,10 +773,11 @@ export class MigrationService {
           sessionId: groupId,
         };
       }
-      restores.push({ target, backupPath: first.backupPath });
+      restores.push({ target, backupPath: first.backupPath, needed: true });
     }
 
     for (const restore of restores) {
+      if (!restore.needed) continue;
       try {
         copyFileSync(restore.backupPath, restore.target);
       } catch (err) {
@@ -730,6 +788,8 @@ export class MigrationService {
     const at = nowIso();
     for (const row of active) {
       this.store.updateMigration(row.id, { executionStatus: 'ROLLED_BACK', rolledBackAt: at });
+      // A pending row never moved its finding to MIGRATED, so there is no status to undo.
+      if (row.executionStatus !== 'APPLIED') continue;
       this.store.updateFindingStatus(
         row.findingId,
         'READY_FOR_MIGRATION',

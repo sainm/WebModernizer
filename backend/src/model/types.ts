@@ -343,7 +343,13 @@ export interface DiffHunk {
   text: string;
 }
 
-export type ExecutionStatus = 'APPLIED' | 'ROLLED_BACK' | 'FAILED';
+/**
+ * `PENDING` means the transaction claimed the file before writing it. A row in that state is either
+ * a write that never happened (the file still equals `beforeHash`) or one that landed without being
+ * confirmed (the file equals `afterHash`); rollback distinguishes the two, which is what makes a
+ * process killed mid-write recoverable.
+ */
+export type ExecutionStatus = 'PENDING' | 'APPLIED' | 'ROLLED_BACK' | 'FAILED';
 export type ValidationStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'SKIPPED';
 
 export interface MigrationExecution {

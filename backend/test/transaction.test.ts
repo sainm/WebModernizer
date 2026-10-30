@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -218,5 +218,75 @@ describe('plan binding between preview and execute', () => {
     // Nothing on disk, and nothing recorded.
     expect(readFileSync(join(h.projectDir, CSS_FILE), 'utf8')).toBe(cssBefore);
     expect(h.store.listMigrations(h.scanId)).toHaveLength(0);
+  });
+});
+
+describe('write-ahead claims', () => {
+  it('leaves no claim behind when a write fails and the transaction is compensated', async () => {
+    const h = await setup();
+    const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
+    const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
+    const cssBefore = readFileSync(join(h.projectDir, CSS_FILE), 'utf8');
+
+    // The CSS file is written first (files are ordered by path); blocking the js directory makes
+    // the second write fail, which is the case that has to compensate the first one.
+    const jsDir = join(h.projectDir, 'js');
+    const originalMode = statSync(jsDir).mode & 0o777;
+    chmodSync(jsDir, 0o500);
+    try {
+      const result = await h.service.execute(h.scanId, [cssFinding.id, jsFinding.id]);
+      expect(result.ok).toBe(false);
+      expect(result.aborted).toBe(true);
+      expect(result.failures[0].reason).toContain('Write failed');
+
+      // Everything is back where it started, and no row claims otherwise.
+      expect(readFileSync(join(h.projectDir, CSS_FILE), 'utf8')).toBe(cssBefore);
+      expect(h.store.listMigrations(h.scanId)).toHaveLength(0);
+      for (const finding of [cssFinding, jsFinding]) {
+        expect(h.store.getFinding(finding.id)?.status).not.toBe('MIGRATED');
+      }
+    } finally {
+      chmodSync(jsDir, originalMode);
+    }
+  });
+
+  it('rolls back a claim whose write landed but was never confirmed', async () => {
+    const h = await setup();
+    const finding = pick(h, 'WL-JS-001', JS_FILE);
+    const before = readFileSync(join(h.projectDir, JS_FILE), 'utf8');
+
+    const result = await h.service.execute(h.scanId, [finding.id]);
+    expect(result.ok).toBe(true);
+    const [row] = h.store.listMigrations(h.scanId);
+    expect(row.executionStatus).toBe('APPLIED');
+
+    // The state a process killed between the write and the confirmation leaves behind.
+    h.store.updateMigration(row.id, { executionStatus: 'PENDING' });
+    expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).not.toBe(before);
+
+    const rollback = h.service.rollbackSession(result.sessionId);
+    expect(rollback.ok).toBe(true);
+    expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).toBe(before);
+    expect(h.store.getMigration(row.id)?.executionStatus).toBe('ROLLED_BACK');
+  });
+
+  it('clears a claim whose write never happened without rewriting the file', async () => {
+    const h = await setup();
+    const finding = pick(h, 'WL-JS-001', JS_FILE);
+
+    const result = await h.service.execute(h.scanId, [finding.id]);
+    expect(result.ok).toBe(true);
+    const [row] = h.store.listMigrations(h.scanId);
+
+    // Undo the write behind the service's back and mark the claim unconfirmed: this is a
+    // transaction that died before the file was touched.
+    copyFileSync(row.backupPath, join(h.projectDir, JS_FILE));
+    h.store.updateMigration(row.id, { executionStatus: 'PENDING' });
+    const atRest = readFileSync(join(h.projectDir, JS_FILE), 'utf8');
+
+    const rollback = h.service.rollbackSession(result.sessionId);
+    expect(rollback.ok).toBe(true);
+    expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).toBe(atRest);
+    expect(h.store.getMigration(row.id)?.executionStatus).toBe('ROLLED_BACK');
   });
 });

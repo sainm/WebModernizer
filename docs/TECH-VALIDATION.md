@@ -785,10 +785,8 @@ read of a Shift_JIS file shifted every offset and made post-migration counts mea
 
 - **~~CORS reflects any Origin and the server binds every interface.~~** Fixed in §21, which also
   added the first HTTP-level tests — the layer these defects lived in.
-- **The commit phase is not atomic with the database.** Files are written first and `migration_execution`
-  rows recorded afterwards; a database failure in between leaves edited files with no audit trail
-  and no rollback path through the UI (the backups exist on disk). Cheap to narrow, not cheap to
-  make exact.
+- **~~The commit phase is not atomic with the database.~~** Narrowed in §23 with a write-ahead
+  claim: the rows now exist before the first byte is written, so the gap is recoverable.
 - **The HTTP layer has no tests at all.** 950 lines of routing, and every test calls the services
   directly — which is exactly why the CORS, SSE and encoding bugs above lived in the server layer.
 
@@ -875,3 +873,49 @@ test; removing only the server's pass-through fails the HTTP test with `expected
 i.e. without the wiring, a tampered plan would have been applied.
 
 Suite: 173 tests.
+
+---
+
+## 23. Nineteenth increment — the claim comes before the byte
+
+Until now `execute()` wrote the files first and inserted the `migration_execution` rows afterwards.
+A database failure in that window — or a process killed between the two — left edited files with no
+audit trail: no row, no backup pointer, no rollback path in the UI, even though the backups were
+sitting on disk under `data/backups/`. The transaction model promised "one auditable unit"; the
+audit record was the last thing created.
+
+**The transaction now claims what it is about to do, then does it, then confirms.** For every file
+it has prepared, `execute()` inserts one `PENDING` row per finding carrying the backup path, the
+`beforeHash` and the hash of the bytes it is about to write. Only after the write lands is the row
+promoted to `APPLIED` and the finding moved to `MIGRATED`.
+
+That gives the crash case two honest outcomes, decided by the file itself rather than by a guess:
+
+- file hash equals `afterHash` → the write happened, rollback restores the backup;
+- file hash equals `beforeHash` → the write never happened, rollback clears the claim and touches
+  nothing;
+- anything else → refused as drift, exactly as before.
+
+If a write fails mid-transaction, the compensation path now also clears the claims of every file
+that ended up back at its original hash. The rows are supposed to describe a difference on disk; if
+there is none, they go. Files that could not be reverted keep their claim, which is what makes them
+findable — the abort message names them and says they can be rolled back.
+
+The UI marks such a session with an amber "Interrupted" badge next to its validation status (a
+crashed transaction must not read like an ordinary applied one), the HTML report counts only
+`APPLIED` in its heading and explains the `PENDING` rows below it, and `docs/LIMITATIONS.md` states
+what this still cannot survive.
+
+### Tests
+
+- a write that fails after a previous file was written: file restored, **no rows left behind**,
+  no finding marked migrated;
+- a row whose write landed but was never confirmed → rollback restores the backup;
+- a row whose write never happened (file matches `beforeHash`) → rollback clears it without
+  rewriting the file.
+
+Each was mutation-verified: filtering rollback back to `APPLIED` fails the second, deleting the
+`beforeHash` branch fails the third, and dropping the claim cleanup fails the first — one test per
+mutation, no collateral failures.
+
+Suite: 176 tests.

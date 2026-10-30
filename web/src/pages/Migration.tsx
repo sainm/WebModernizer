@@ -597,6 +597,10 @@ export default function Migration() {
             const allRolledBack = group.rows.every((row) => row.executionStatus === 'ROLLED_BACK');
             const failed = group.rows.some((row) => row.validationStatus === 'FAILED');
             const passed = group.rows.every((row) => row.validationStatus === 'PASSED');
+            // Claimed but never confirmed: the process stopped between the claim and the write
+            // confirmation. The backup is recorded, so this is recoverable — but only if it is
+            // visible, and it must not read like an ordinary applied transaction.
+            const interrupted = !allRolledBack && group.rows.some((row) => row.executionStatus === 'PENDING');
             return (
               <tr key={group.id}>
                 <td>
@@ -618,6 +622,11 @@ export default function Migration() {
                   <span className={`badge ${allRolledBack ? 'neutral' : failed ? 'high' : passed ? 'ok' : 'warn'}`}>
                     {allRolledBack ? t('migration.rolledBack') : failed ? 'FAILED' : passed ? 'PASSED' : 'PENDING'}
                   </span>
+                  {interrupted ? (
+                    <span className="badge warn" style={{ marginLeft: 6 }} title={t('migration.interruptedHint')}>
+                      {t('migration.interrupted')}
+                    </span>
+                  ) : null}
                 </td>
                 <td className="muted nowrap" style={{ fontSize: 11 }}>{new Date(group.rows[0].executedAt).toLocaleString()}</td>
                 <td className="right">

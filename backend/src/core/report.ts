@@ -239,6 +239,9 @@ export function reportAsHtml(store: Store, scanId: string): string {
     )
     .join('\n');
 
+  const appliedCount = payload.migrations.filter((execution) => execution.executionStatus === 'APPLIED').length;
+  const unconfirmedCount = payload.migrations.filter((execution) => execution.executionStatus === 'PENDING').length;
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -310,7 +313,12 @@ export function reportAsHtml(store: Store, scanId: string): string {
     .map((f) => `<li class="mono">${escapeHtml(f.filePath)}:${f.startLine} — ${escapeHtml(f.message)}</li>`)
     .join('') || '<li>None</li>'}</ul>
 
-  <h2>Migrations applied (${payload.migrations.length})</h2>
+  <h2>Migrations applied (${appliedCount})</h2>
+  ${
+    unconfirmedCount > 0
+      ? `<p class="note">${unconfirmedCount} row(s) below are PENDING: the transaction was recorded but never confirmed, which means the process stopped between the write and its confirmation. Roll back from the tool to restore the backup (or to confirm nothing was written).</p>`
+      : ''
+  }
   ${
     payload.migrations.length === 0
       ? '<p class="note">No migration was applied for this scan.</p>'

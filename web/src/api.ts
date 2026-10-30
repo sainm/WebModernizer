@@ -219,7 +219,7 @@ export interface MigrationExecution {
   beforeHash: string;
   afterHash: string;
   diff: string;
-  executionStatus: 'APPLIED' | 'ROLLED_BACK' | 'FAILED';
+  executionStatus: 'PENDING' | 'APPLIED' | 'ROLLED_BACK' | 'FAILED';
   validationStatus: 'PENDING' | 'PASSED' | 'FAILED' | 'SKIPPED';
   executedAt: string;
   rolledBackAt: string | null;

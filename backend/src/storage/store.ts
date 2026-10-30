@@ -835,6 +835,14 @@ export class Store {
     this.db.prepare(`UPDATE migration_execution SET ${sets.join(', ')} WHERE id = ?`).run(...values);
   }
 
+  /**
+   * Removes a claim that never became a migration. Only used when a transaction is abandoned
+   * before any file was written: the row described work that did not happen.
+   */
+  deleteMigration(id: string): void {
+    this.db.prepare('DELETE FROM migration_execution WHERE id = ?').run(id);
+  }
+
   /** Every execution produced by one execute() call, across all files. */
   listMigrationsBySession(sessionId: string): MigrationExecution[] {
     const rows = this.db

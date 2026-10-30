@@ -962,3 +962,48 @@ rollback guard makes the refusal test fail with `expected true to be false`, i.e
 while a migration was holding a plan against the same bytes.
 
 Suite: 178 tests.
+
+---
+
+## 25. Twenty-first increment — what moved since the last scan
+
+A migration is a sequence of small fixes over weeks, but every scan was an island: the dashboard
+listed totals, and to learn whether anything had improved you had to open the Compare page and pick
+two scans by hand. The numbers that matter during a migration — what got fixed, what got introduced
+— existed only as a derived view.
+
+**The scan now records its own delta.** When it finishes, it compares itself against the scan it
+already uses for incremental reuse, and stores `compared_scan_id`, `resolved_count` and
+`added_count` on the row. The comparison is the same `compareFindings` the Compare page runs, so
+there is one definition of "resolved" in the codebase, not two.
+
+Identity is rule + path + normalised snippet, so the delta survives edits elsewhere in the file and
+counts a rewritten file honestly: delete `js/legacy-events.js` from the fixture and the next scan
+reports **25 fixed, 0 new** (99 findings → 74), with no offset bookkeeping involved.
+
+The delta is only recorded when a comparable scan exists — same rule signature. Comparing across a
+rule change would produce a number that looks like progress and is not; those scans show "no
+previous scan to compare" instead.
+
+The scan detail page and the Overview card both show it as two badges with a link to the baseline,
+in all three languages.
+
+### A bug the screenshot found
+
+Rendering the card showed **"0 / 11 — 0 %"** on a scan that had just completed 11 of 11 files. The
+cause had nothing to do with the trend: a fully incremental scan reuses every file, never enters
+the parse loop, and `scannedCount` was only advanced inside that loop. Every fully-cached rescan
+therefore recorded `scanned_file_count = 0`, and the dashboard claimed nothing had been scanned.
+The prepare phase now emits one final progress tick once every file is accounted for.
+
+Caught by looking at the page, not by an assertion — and it had been wrong for as long as
+incremental scanning has existed. The guard added is `expect(second.scannedFileCount).toBe(12)`:
+removing the fix makes it fail with `expected +0 to be 12`.
+
+### Also
+
+`createScan()` no longer defaults the rule signature to `null`. A scan created without one silently
+lost both incremental reuse *and* the new delta; the parameter is now required, and the nine test
+call sites pass the real signature like production does.
+
+Suite: 182 tests.

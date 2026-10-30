@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
 
@@ -43,7 +44,7 @@ async function setup(): Promise<Harness> {
   const store = new Store({ dataDir: join(dir, 'data') });
   const scans = new ScanManager(store);
   const project = store.createProject('Transaction Test', projectDir, defaultProjectConfig());
-  const scan = store.createScan(project, defaultProjectConfig());
+  const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
   scans.start(scan.id);
   await waitForScan(store, scan.id);
   const harness: Harness = { dir, projectDir, store, scanId: scan.id, service: new MigrationService(store) };
@@ -349,7 +350,7 @@ describe('concurrent migrations', () => {
     harnesses.push({ dir, projectDir, store, scanId: '', service: new MigrationService(store) });
     const config = defaultProjectConfig();
     const project = store.createProject('Concurrency Test', projectDir, config);
-    const scan = store.createScan(project, config);
+    const scan = store.createScan(project, config, ruleSignature());
     new ScanManager(store).start(scan.id);
     await waitForScan(store, scan.id);
 

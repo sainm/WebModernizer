@@ -179,6 +179,20 @@ export default function ScanDetail() {
             </dd>
             <dt>{t('scans.findings')}</dt>
             <dd>{progress?.findings ?? current.findingCount}</dd>
+            <dt>{t('scan.trend')}</dt>
+            <dd>
+              {current.comparedScanId ? (
+                <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                  <span className="badge ok">{t('scan.trendFixed', { count: current.resolvedCount })}</span>
+                  <span className="badge warn">{t('scan.trendAdded', { count: current.addedCount })}</span>
+                  <Link className="muted mono" to={`/scans/${current.comparedScanId}`} style={{ fontSize: 11 }}>
+                    {current.comparedScanId.slice(0, 12)}
+                  </Link>
+                </span>
+              ) : (
+                <span className="muted">{t('scan.trendNoBaseline')}</span>
+              )}
+            </dd>
             <dt>{t('overview.parseFailures')}</dt>
             <dd>{progress?.failedFiles ?? current.failedFileCount}</dd>
             <dt>{t('scans.started')}</dt>

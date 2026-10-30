@@ -9,6 +9,7 @@ import { defaultProjectConfig } from '../src/core/scanner.js';
 import { countIgnoreMatches, findIgnoreMatch, globToRegExp, pathMatches } from '../src/core/ignoreRules.js';
 import { applyIgnoreRules } from '../src/core/ignoreApply.js';
 import { buildSummary } from '../src/core/report.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { IgnoreRule, ScanStatus } from '../src/model/types.js';
 
@@ -107,7 +108,7 @@ async function scanWithIgnoreRules(): Promise<{ store: Store; scanId: string; pr
     enabled: true,
     createdBy: 'test',
   });
-  const scan = store.createScan(project, defaultProjectConfig());
+  const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
   scans.start(scan.id);
 
   const started = Date.now();
@@ -196,7 +197,7 @@ describe('applying rules to an existing scan', () => {
 
     const scans = new ScanManager(store);
     const project = store.createProject('Apply Test', projectDir, defaultProjectConfig());
-    const scan = store.createScan(project, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
     scans.start(scan.id);
 
     const started = Date.now();
@@ -302,7 +303,7 @@ describe('disabled rules applied to an existing scan', () => {
 
     const scans = new ScanManager(store);
     const project = store.createProject('Rule Off', projectDir, defaultProjectConfig());
-    const scan = store.createScan(project, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
     scans.start(scan.id);
     const started = Date.now();
     while (Date.now() - started < 30000) {

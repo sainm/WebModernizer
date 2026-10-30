@@ -186,6 +186,10 @@ explicit reason; convert the file to UTF-8 (or migrate it by hand) and rescan.
 **Large-file and binary handling is coarse.** Files above 2 MB are skipped with a recorded reason;
 binary detection is a NUL-byte probe over the first 8 KB.
 
+**The trend is only recorded when the rule set is unchanged.** A scan after a rule change shows no
+delta, because the two numbers would not be comparable. Comparing any two scans by hand (the Compare
+page) still works; it says what it is comparing.
+
 **Incremental scans skip parsing, not file reads.** A file is reused only when its SHA-256 and
 the rule signature both match the previous scan, so every file is still read once. On a normal
 filesystem that read is negligible; in a sandboxed environment it dominated the measurement

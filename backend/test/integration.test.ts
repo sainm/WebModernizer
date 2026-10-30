@@ -8,6 +8,7 @@ import { ScanManager } from '../src/core/orchestrator.js';
 import { buildSummary } from '../src/core/report.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
 import { ValidationService } from '../src/core/validation.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
 
@@ -38,7 +39,7 @@ describe('end-to-end scan of the legacy example project', () => {
     store = new Store({ dataDir: join(workDir, 'data') });
     const scans = new ScanManager(store);
     const project = store.createProject('Legacy Orders', projectCopy, defaultProjectConfig());
-    const scan = store.createScan(project, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
     scanId = scan.id;
     scans.start(scan.id);
     await waitForScan(store, scan.id);

@@ -61,6 +61,10 @@ export interface ScanTask {
   failedFileCount: number;
   findingCount: number;
   totalFileCount: number;
+  /** Scan this one was compared against; null for the first scan or after a rule change. */
+  comparedScanId: string | null;
+  resolvedCount: number;
+  addedCount: number;
   currentFile: string | null;
   errorSummary: string | null;
   configSnapshot: ProjectConfig;

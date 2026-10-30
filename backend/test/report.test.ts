@@ -8,6 +8,7 @@ import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { buildSummary, reportAsHtml, reportAsJson } from '../src/core/report.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
 
@@ -50,7 +51,7 @@ async function setup() {
 
   const scans = new ScanManager(store);
   const project = store.createProject('Report Test', projectDir, defaultProjectConfig());
-  const scan = store.createScan(project, defaultProjectConfig());
+  const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
   scans.start(scan.id);
 
   const started = Date.now();
@@ -145,7 +146,7 @@ describe('module grouping', () => {
 
     const scans = new ScanManager(store);
     const project = store.createProject('Modules', projectDir, config);
-    const scan = store.createScan(project, config);
+    const scan = store.createScan(project, config, ruleSignature());
     scans.start(scan.id);
     const started = Date.now();
     while (Date.now() - started < 30000) {

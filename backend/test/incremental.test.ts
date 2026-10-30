@@ -101,6 +101,10 @@ describe('incremental scans', () => {
     // Same file count, every one reused, identical finding count and locations.
     expect(secondFiles).toHaveLength(firstFiles.length);
     expect(secondFiles.every((file) => file.reused)).toBe(true);
+    // A fully reused scan never enters the parse loop; the progress counters must still add up,
+    // otherwise the dashboard reports "0 of 11" for a finished scan.
+    expect(store.getScan(second)?.scannedFileCount).toBe(firstFiles.length);
+    expect(store.getScan(second)?.parsedFileCount).toBe(firstFiles.length);
     expect(secondFindings).toHaveLength(firstFindings.length);
     expect(secondFindings.map((f) => `${f.filePath}:${f.startLine}:${f.ruleId}`)).toEqual(
       firstFindings.map((f) => `${f.filePath}:${f.startLine}:${f.ruleId}`),

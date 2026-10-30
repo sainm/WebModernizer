@@ -256,6 +256,12 @@ export interface ScanTask {
   findingCount: number;
   /** Files discovery found. Differs from scannedFileCount when a scan was interrupted. */
   totalFileCount: number;
+  /** The scan this one was compared against, when a previous scan was available. */
+  comparedScanId: string | null;
+  /** Findings present in `comparedScanId` and gone now; 0 when nothing was compared. */
+  resolvedCount: number;
+  /** Findings that did not exist in `comparedScanId`. */
+  addedCount: number;
   currentFile: string | null;
   errorSummary: string | null;
   /** Project config snapshot captured when the scan started */

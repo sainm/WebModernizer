@@ -13,6 +13,7 @@ import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js'
 import { decodeBuffer } from './textDecode.js';
 import { writeScanReport } from './report.js';
 import { IGNORE_NOTE_PREFIX, findIgnoreMatch, ignoreNote } from './ignoreRules.js';
+import { compareFindings } from './compare.js';
 import { createParsePool, poolSizeFromEnv, type ParsePool } from './parsePool.js';
 
 export interface ScanEvent {
@@ -325,6 +326,10 @@ export class ScanManager {
         }
       }
     }
+
+    // A fully incremental scan never enters the parse loop, so without this the run would report
+    // "0 of 11 scanned" for a project where every file was accounted for.
+    onProgress(entries.length, null);
 
     return results.map((item, index) => {
       if (item) return item;
@@ -686,11 +691,28 @@ export class ScanManager {
       if (reusedPaths.size > 0) {
         this.log(runner, scanId, 'info', 'FINDING_MERGE', `Reused ${reusedPaths.size} unchanged file(s) from ${previous?.id}`);
       }
+
+      // How much moved since the previous scan. The same comparison the Compare page runs on
+      // demand is recorded here, so a trend is available without recomputing it per page view —
+      // and so "fixed 12, introduced 3" survives the next scan overwriting the numbers.
+      const delta = previous ? compareFindings([...previousFindings.values()].flat(), findings) : null;
+      if (delta) {
+        this.log(
+          runner,
+          scanId,
+          'info',
+          'FINDING_MERGE',
+          `Since scan ${previous?.id}: ${delta.resolved.length} fixed, ${delta.added.length} new, ${delta.unchanged} unchanged`,
+        );
+      }
       this.store.updateScan(scanId, {
         scannedFileCount: scannedCount,
         parsedFileCount: parsedCount,
         failedFileCount: failedCount,
         findingCount: findings.length,
+        comparedScanId: previous?.id ?? null,
+        resolvedCount: delta?.resolved.length ?? 0,
+        addedCount: delta?.added.length ?? 0,
         currentFile: null,
         logJson: JSON.stringify(runner.log),
       });

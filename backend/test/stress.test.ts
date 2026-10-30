@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateStressProject } from '../../scripts/gen-stress-project.mjs';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
 
@@ -33,7 +34,7 @@ describe('hostile corpus', () => {
     store = new Store({ dataDir: join(workDir, 'data') });
     const scans = new ScanManager(store);
     const project = store.createProject('Stress', projectDir, defaultProjectConfig());
-    const scan = store.createScan(project, defaultProjectConfig());
+    const scan = store.createScan(project, defaultProjectConfig(), ruleSignature());
     scanId = scan.id;
     scans.start(scan.id);
 

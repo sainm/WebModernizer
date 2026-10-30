@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS scan_task (
   failed_file_count INTEGER NOT NULL DEFAULT 0,
   finding_count INTEGER NOT NULL DEFAULT 0,
   total_file_count INTEGER NOT NULL DEFAULT 0,
+  compared_scan_id TEXT,
+  resolved_count INTEGER NOT NULL DEFAULT 0,
+  added_count INTEGER NOT NULL DEFAULT 0,
   current_file TEXT,
   error_summary TEXT,
   config_snapshot TEXT NOT NULL,
@@ -313,6 +316,17 @@ export class Store {
     if (!scanColumns.includes('total_file_count')) {
       this.db.exec('ALTER TABLE scan_task ADD COLUMN total_file_count INTEGER NOT NULL DEFAULT 0');
     }
+    // The delta against the previous scan, recorded when the scan finishes so the trend does not
+    // depend on recomputing a comparison later.
+    if (!scanColumns.includes('compared_scan_id')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN compared_scan_id TEXT');
+    }
+    if (!scanColumns.includes('resolved_count')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN resolved_count INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!scanColumns.includes('added_count')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN added_count INTEGER NOT NULL DEFAULT 0');
+    }
     const fileColumns = (this.db.prepare('PRAGMA table_info(scan_file)').all() as unknown as Array<{ name: string }>).map(
       (row) => row.name,
     );
@@ -385,7 +399,7 @@ export class Store {
 
   /* ----------------------------- scans ----------------------------- */
 
-  createScan(project: Project, config: ProjectConfig, ruleSignature: string | null = null): ScanTask {
+  createScan(project: Project, config: ProjectConfig, ruleSignature: string | null): ScanTask {
     const task: ScanTask = {
       id: newId('scn'),
       projectId: project.id,
@@ -401,6 +415,9 @@ export class Store {
       failedFileCount: 0,
       findingCount: 0,
       totalFileCount: 0,
+      comparedScanId: null,
+      resolvedCount: 0,
+      addedCount: 0,
       currentFile: null,
       errorSummary: null,
       configSnapshot: config,
@@ -429,6 +446,9 @@ export class Store {
         | 'failedFileCount'
         | 'findingCount'
         | 'totalFileCount'
+        | 'comparedScanId'
+        | 'resolvedCount'
+        | 'addedCount'
         | 'currentFile'
         | 'errorSummary'
       >
@@ -446,6 +466,9 @@ export class Store {
       failedFileCount: 'failed_file_count',
       findingCount: 'finding_count',
       totalFileCount: 'total_file_count',
+      comparedScanId: 'compared_scan_id',
+      resolvedCount: 'resolved_count',
+      addedCount: 'added_count',
       currentFile: 'current_file',
       errorSummary: 'error_summary',
       cancelled: 'cancelled',
@@ -1016,6 +1039,9 @@ interface ScanRow {
   failed_file_count: number;
   finding_count: number;
   total_file_count: number;
+  compared_scan_id: string | null;
+  resolved_count: number;
+  added_count: number;
   current_file: string | null;
   error_summary: string | null;
   config_snapshot: string;
@@ -1143,6 +1169,9 @@ function mapScan(row: ScanRow): ScanTask {
     failedFileCount: row.failed_file_count,
     findingCount: row.finding_count,
     totalFileCount: row.total_file_count,
+    comparedScanId: row.compared_scan_id ?? null,
+    resolvedCount: row.resolved_count,
+    addedCount: row.added_count,
     currentFile: row.current_file,
     errorSummary: row.error_summary,
     configSnapshot: JSON.parse(row.config_snapshot) as ProjectConfig,

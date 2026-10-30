@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
+import { ruleSignature } from '../src/recipes/registry.js';
 import { Store } from '../src/storage/store.js';
 import type { ScanStatus } from '../src/model/types.js';
 
@@ -58,7 +59,7 @@ async function setup(files: Record<string, { bytes: Buffer; mode?: number }>) {
   const scans = new ScanManager(store);
   const config = defaultProjectConfig();
   const project = store.createProject('Encoding Test', projectDir, config);
-  const scan = store.createScan(project, config);
+  const scan = store.createScan(project, config, ruleSignature());
   scans.start(scan.id);
   await waitForScan(store, scan.id);
 

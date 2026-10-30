@@ -81,6 +81,17 @@ export default function Overview() {
                 <dd>{formatDuration(latest.startedAt, latest.completedAt)}</dd>
                 <dt>{t('scans.phase')}</dt>
                 <dd>{latest.phase ? phase(latest.phase) : '—'}</dd>
+                <dt>{t('scan.trend')}</dt>
+                <dd>
+                  {latest.comparedScanId ? (
+                    <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                      <span className="badge ok">{t('scan.trendFixed', { count: latest.resolvedCount })}</span>
+                      <span className="badge warn">{t('scan.trendAdded', { count: latest.addedCount })}</span>
+                    </span>
+                  ) : (
+                    <span className="muted">{t('scan.trendNoBaseline')}</span>
+                  )}
+                </dd>
                 <dt>Scan ID</dt>
                 <dd className="mono">{latest.id}</dd>
               </dl>

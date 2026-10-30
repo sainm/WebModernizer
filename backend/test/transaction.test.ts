@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -288,5 +288,100 @@ describe('write-ahead claims', () => {
     expect(rollback.ok).toBe(true);
     expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).toBe(atRest);
     expect(h.store.getMigration(row.id)?.executionStatus).toBe('ROLLED_BACK');
+  });
+});
+
+describe('rollback while a migration is running', () => {
+  it('refuses instead of restoring bytes a running migration is about to rewrite', async () => {
+    const h = await setup();
+    const cssFinding = pick(h, 'WL-CSS-005', CSS_FILE);
+    const jsFinding = pick(h, 'WL-JS-001', JS_FILE);
+
+    const first = await h.service.execute(h.scanId, [cssFinding.id]);
+    expect(first.ok).toBe(true);
+
+    // Hold the second migration inside its visual capture: that is the only await between reading
+    // the file and writing it, so it is the only moment a rollback can land in between.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const running = h.service.execute(h.scanId, [jsFinding.id], {
+      visual: {
+        pages: [{ pageKey: 'p', url: 'http://localhost:5173/' }],
+        capture: async () => {
+          await gate;
+          return null;
+        },
+      },
+    });
+    await new Promise((done) => setTimeout(done, 20));
+
+    const refused = h.service.rollbackSession(first.sessionId);
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toMatch(/migration is running/);
+
+    release();
+    const second = await running;
+    expect(second.ok).toBe(true);
+
+    // Once it has finished, the same rollback goes through.
+    expect(h.service.rollbackSession(first.sessionId).ok).toBe(true);
+  });
+});
+
+describe('concurrent migrations', () => {
+  it('does not lose an edit when two migrations touch the same project at once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'weblift-race-'));
+    const projectDir = join(dir, 'project');
+    mkdirSync(join(projectDir, 'js'), { recursive: true });
+    const target = join(projectDir, 'js/two.js');
+    writeFileSync(
+      target,
+      `function boot() {
+  document.getElementById('a').attachEvent('onclick', first);
+  document.getElementById('b').attachEvent('onclick', second);
+}
+`,
+    );
+
+    const store = new Store({ dataDir: join(dir, 'data') });
+    harnesses.push({ dir, projectDir, store, scanId: '', service: new MigrationService(store) });
+    const config = defaultProjectConfig();
+    const project = store.createProject('Concurrency Test', projectDir, config);
+    const scan = store.createScan(project, config);
+    new ScanManager(store).start(scan.id);
+    await waitForScan(store, scan.id);
+
+    const findings = store.listAllFindings(scan.id).filter((finding) => finding.ruleId === 'WL-JS-001');
+    expect(findings).toHaveLength(2);
+
+    // The capture is the await that used to sit between "prepare" and "write": long enough for a
+    // second execute() to prepare from the same bytes and then overwrite the first one's result.
+    const capture = async (): Promise<null> => {
+      await new Promise((done) => setTimeout(done, 25));
+      return null;
+    };
+    const visual = { pages: [{ pageKey: 'p', url: 'http://localhost:5173/' }], capture };
+    const service = new MigrationService(store);
+
+    const [first, second] = await Promise.all([
+      service.execute(scan.id, [findings[0].id], { visual }),
+      service.execute(scan.id, [findings[1].id], { visual }),
+    ]);
+
+    const text = readFileSync(target, 'utf8');
+    // One migration landed. The other was refused because the file had changed — not applied
+    // silently on top, which is what used to happen and what lost the first edit.
+    expect([first.ok, second.ok].filter(Boolean)).toHaveLength(1);
+    expect(text.match(/addEventListener/g) ?? []).toHaveLength(1);
+    expect(text.match(/attachEvent/g) ?? []).toHaveLength(1);
+
+    const refused = first.ok ? second : first;
+    expect(refused.aborted).toBe(true);
+    expect(refused.failures[0].reason).toMatch(/changed after the scan/);
+
+    // Exactly one session recorded, so the history matches the single file change.
+    expect(new Set(store.listMigrations(scan.id).map((row) => row.sessionId)).size).toBe(1);
   });
 });

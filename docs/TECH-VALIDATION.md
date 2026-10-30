@@ -787,8 +787,9 @@ read of a Shift_JIS file shifted every offset and made post-migration counts mea
   added the first HTTP-level tests — the layer these defects lived in.
 - **~~The commit phase is not atomic with the database.~~** Narrowed in §23 with a write-ahead
   claim: the rows now exist before the first byte is written, so the gap is recoverable.
-- **The HTTP layer has no tests at all.** 950 lines of routing, and every test calls the services
-  directly — which is exactly why the CORS, SSE and encoding bugs above lived in the server layer.
+- ~~**The HTTP layer has no tests at all.**~~ First batch added in §21.
+- **Concurrency is now serialized in-process** (§24). Two *processes* touching the same project
+  are still not coordinated; nothing but the write-ahead claim would notice.
 
 Suite: 161 tests.
 
@@ -919,3 +920,45 @@ Each was mutation-verified: filtering rollback back to `APPLIED` fails the secon
 mutation, no collateral failures.
 
 Suite: 176 tests.
+
+---
+
+## 24. Twentieth increment — one mutation at a time per project
+
+The review listed "no concurrency lock" as the last open item. Working out *where* the race
+actually is turned out to matter more than the lock itself.
+
+`execute()` is `async`, but the region that matters — claim, write, confirm — contains no `await`,
+so a second call cannot interleave with it: Node runs it to completion. The exposure is the awaits
+*around* it. The visual capture sits between "prepare" (read the file, verify its hash, compute the
+edit) and "write". That gap is long enough for a second `execute()` to prepare from the same
+original bytes, and then both write: the second overwrites the first's edit while both report
+`ok: true`.
+
+**Reproduced before fixing.** Two findings in one file, two migrations at once, a capture that
+awaits 25 ms:
+
+```
+without the queue:  ok: [true, true]   file: one edit applied, the other silently lost
+with the queue:     ok: [true, false]  file: one edit applied, the other refused as stale
+```
+
+The refusal is the correct outcome: the second plan was computed against bytes that no longer
+exist, and `preview()` already knows how to say so ("the file changed after the scan").
+
+- **A per-project queue** wraps `execute()`. The ordinary path — no visual comparison — is a
+  promise resolved immediately, so nothing slows down; the capture path is serialized.
+- **Rollback refuses while a migration is in flight** rather than joining the queue. Rollback is
+  synchronous, so it can only ever land inside a capture; queueing it would mean making three
+  public methods async and rewriting a dozen tests to buy nothing. A refusal with a reason the
+  user can act on is the honest trade.
+- **Temp file names** are now `pid` + counter instead of the millisecond clock. Two writers could
+  otherwise pick the same path and rename each other's bytes into place, which no lock in this
+  process would prevent.
+
+**Mutation-verified both ways.** Removing the queue makes the concurrency test fail with
+`expected [true, true] to have a length of 1` — the lost update, stated plainly. Removing the
+rollback guard makes the refusal test fail with `expected true to be false`, i.e. the rollback ran
+while a migration was holding a plan against the same bytes.
+
+Suite: 178 tests.

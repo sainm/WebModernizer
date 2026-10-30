@@ -6,6 +6,7 @@ import type {
   MigrationPlan,
   MigrationPlanItem,
   MigrationVisualResult,
+  ScanTask,
   TextEdit,
 } from '../model/types.js';
 import { newId, nowIso, sha256 } from '../model/ids.js';
@@ -71,9 +72,13 @@ interface PreparedFile {
   items: MigrationPlanItem[];
 }
 
+let tempCounter = 0;
+
 /** Writes to a temp file in the same directory, then renames, preserving permissions. */
 function writeFileAtomic(absPath: string, content: string): void {
-  const tempPath = `${absPath}.weblift-tmp-${Date.now()}`;
+  // pid + counter, not just the clock: two writers inside the same millisecond would otherwise
+  // pick the same temp path and rename each other's bytes into place.
+  const tempPath = `${absPath}.weblift-tmp-${process.pid}-${(tempCounter += 1)}`;
   const originalMode = statSync(absPath).mode & 0o7777;
   writeFileSync(tempPath, content, { encoding: 'utf8', mode: originalMode });
   renameSync(tempPath, absPath);
@@ -152,6 +157,37 @@ function planDigest(scanTaskId: string, items: MigrationPlanItem[]): string {
  */
 export class MigrationService {
   constructor(private readonly store: Store) {}
+
+  /** Tail of the mutation queue per project. */
+  private readonly queues = new Map<string, Promise<void>>();
+
+  /**
+   * Runs a mutating operation after every earlier one on the same project.
+   *
+   * The claim → write → confirm region is synchronous, so it cannot interleave on its own. The
+   * awaits around it can: a visual capture sits between "prepare" and "write", which is long
+   * enough for a second execute() to prepare from the same original bytes and then overwrite the
+   * first one's work. Queueing closes that window without slowing the ordinary path down.
+   */
+  private serialize<T>(projectId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(projectId) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.queues.set(projectId, tail);
+    void tail.then(() => {
+      // Only clear the entry if nothing else queued behind this one.
+      if (this.queues.get(projectId) === tail) this.queues.delete(projectId);
+    });
+    return run;
+  }
+
+  /** True while a migration is in flight for this project. */
+  private isMutating(projectId: string): boolean {
+    return this.queues.has(projectId);
+  }
 
   preview(options: PreviewOptions): MigrationPlan {
     const scan = this.store.getScan(options.scanTaskId);
@@ -352,7 +388,15 @@ export class MigrationService {
   async execute(scanTaskId: string, findingIds: string[], options: ExecuteOptions = {}): Promise<ExecuteResult> {
     const scan = this.store.getScan(scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${scanTaskId}`);
+    return this.serialize(scan.projectId, () => this.executeLocked(scan, scanTaskId, findingIds, options));
+  }
 
+  private async executeLocked(
+    scan: ScanTask,
+    scanTaskId: string,
+    findingIds: string[],
+    options: ExecuteOptions,
+  ): Promise<ExecuteResult> {
     const sessionId = newId('ses');
     const plan = this.preview({ scanTaskId, findingIds });
     const skipped: ExecuteResult['failures'] = [];
@@ -618,7 +662,20 @@ export class MigrationService {
   rollbackSession(sessionId: string): RollbackResult {
     const rows = this.store.listMigrationsBySession(sessionId);
     if (rows.length === 0) return { ok: false, reason: 'Unknown session' };
+    const busy = this.mutationInFlight(rows[0].projectId);
+    if (busy) return { ok: false, reason: busy, affectedFindings: 0, batchId: null, sessionId };
     return this.rollbackRows(rows, sessionId, 'session');
+  }
+
+  /**
+   * Rollback never interleaves with itself or with the write region of a migration — both are
+   * synchronous. It can only land inside a migration's visual capture, where the plan it would
+   * restore was computed from bytes that are about to change. Refusing is cheap and honest.
+   */
+  private mutationInFlight(projectId: string): string | null {
+    return this.isMutating(projectId)
+      ? 'A migration is running on this project. Wait for it to finish, then roll back.'
+      : null;
   }
   /**
    * Captures the pages again and diffs them against the pre-write screenshots. A visual
@@ -719,6 +776,8 @@ export class MigrationService {
   rollbackBatch(batchId: string): RollbackResult {
     const rows = this.store.listMigrationsByBatch(batchId);
     if (rows.length === 0) return { ok: false, reason: 'Unknown batch' };
+    const busy = this.mutationInFlight(rows[0].projectId);
+    if (busy) return { ok: false, reason: busy, affectedFindings: 0, batchId, sessionId: null };
     return this.rollbackRows(rows, batchId, 'batch');
   }
 

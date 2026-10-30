@@ -16,6 +16,11 @@ port can scan any directory that user can read, read the sources back, and apply
 copied to `backups/<executionId>/<path>` and hash-verified before the write, and rollback refuses if
 the file drifted since. Deleting the data directory therefore deletes the only backup the tool made.
 
+**Migrations are serialized per project inside one process.** Two `execute()` calls, or a rollback
+during a migration, queue or are refused rather than interleaving. Two *processes* pointed at the
+same project are not coordinated — the write-ahead claim is what would surface the damage, not
+prevention.
+
 **A transaction is claimed in the database before it touches the disk.** If the process is killed
 between the write and its confirmation, the row stays `PENDING` and the history shows it as
 interrupted; rolling it back either restores the backup or, when the file still matches its original

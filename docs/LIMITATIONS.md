@@ -42,6 +42,13 @@ invisible: the layout quirks around `document.body.clientHeight`, `event.charCod
 differences, and so on. A clean scan means "none of the covered patterns were found", not
 "this page works on Chrome".
 
+**Inline style attributes are analyzed declaration by declaration, but not rewritten.** Every
+declaration inside `style="..."` is parsed with file-absolute offsets, so `filter`, `zoom`, `-ms-`
+properties, `behavior` and `expression()` are detected in an attribute exactly as in a stylesheet,
+including star/underscore hacks. No recipe edits them: their ranges live inside an HTML attribute,
+so findings in a style attribute are forced to MANUAL instead of promising a rewrite that the
+stylesheet helpers cannot safely perform.
+
 **Comment and string safety is per-rule.** The AST-based rules cannot match inside comments or
 string literals. Two rules are text-based by necessity — conditional compilation (`@cc_on`) and
 CSS value hacks — because the pattern *is* the literal text. They are documented as such and

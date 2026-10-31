@@ -44,6 +44,12 @@ function normalizeLevel(
   if (!touched && (level === 'SAFE' || level === 'CONDITIONAL') && !recipeRuleIds.has(rule.meta.id)) {
     level = 'MANUAL';
   }
+  if (
+    (level === 'SAFE' || level === 'CONDITIONAL') &&
+    raw.evidence.container?.startsWith('style attribute')
+  ) {
+    level = 'MANUAL';
+  }
   return { level, touchedDynamic: Boolean(touched) };
 }
 

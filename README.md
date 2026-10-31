@@ -62,7 +62,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 279 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 283 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
@@ -73,7 +73,7 @@ npm test        # 279 tests: parser, rules, per-rule coverage, rule metadata, me
                 #            inline attribute window.event, nested handler helpers,
                 #            reusing an existing event parameter, event.button numbering,
                 #            srcUrn / recordset / setExpression detection, filter opacity,
-                #            gradient filter conversion
+                #            gradient filter conversion, inline style declarations
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -105,6 +105,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | IE event.button numbering: left/middle literal comparisons are rewritten to Chrome 0/1; reads and bitmask tests stay manual | done |
 | Alpha-only IE filter conversion: `alpha(opacity=N)` / MS Alpha progid becomes `opacity: N/100` | done |
 | Simple IE gradient filter conversion: two-color `gradient(...)` becomes `background-image: linear-gradient(...)` | done |
+| Inline `style=""` attributes parsed declaration-by-declaration: filter, zoom, `-ms-` and behavior are detected; edits stay manual | done |
 | Detection for event.srcUrn, event.recordset and style.setExpression/removeExpression | done |
 | Static validation after migration | done |
 | Encoding-faithful write-back for non-UTF-8 sources (Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16, UTF-8 BOM) | done |
@@ -261,7 +262,7 @@ detected and that findings inside it land on the correct line.
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 279 tests |
+| 15 | Automated tests for core behaviour | 283 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

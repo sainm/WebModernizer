@@ -1,4 +1,3 @@
-import { rawAttributeValue } from '../../parser/htmlParser.js';
 import { alphaOpacityValue, ieGradientValue, standardForMs } from '../cssStandards.js';
 import type { CssDeclaration } from '../../parser/cssParser.js';
 import type { FileContext, RawFinding, Rule, RuleDraft } from '../types.js';
@@ -35,31 +34,12 @@ function eachDeclaration(ctx: FileContext, visit: (hit: CssHit) => void): void {
     }
   }
 
-  const html = ctx.parsed.html;
-  if (!html) return;
-  for (const element of html.elements) {
-    const styleAttr = (element.attrs ?? []).find((a) => a.name.toLowerCase() === 'style');
-    if (!styleAttr) continue;
-    const raw = rawAttributeValue(element, 'style', ctx.text);
-    if (!raw || !raw.value.trim()) continue;
-    const tag = (element.tagName ?? '').toLowerCase();
-    const pseudo: CssDeclaration = {
-      prop: '',
-      value: raw.value,
-      important: false,
-      startOffset: raw.offset,
-      endOffset: raw.offset + raw.value.length,
-      startLine: 0,
-      startColumn: 0,
-      raw: raw.value,
-      selector: `<${tag} style>`,
-      atRuleChain: [],
-    };
+  for (const decl of ctx.parsed.inlineCssDeclarations) {
     visit({
-      declaration: pseudo,
-      offset: raw.offset,
-      length: raw.value.length,
-      container: `style attribute on <${tag}>`,
+      declaration: decl,
+      offset: decl.startOffset,
+      length: decl.endOffset - decl.startOffset,
+      container: decl.inlineContainer ?? 'style attribute',
     });
   }
 }
@@ -76,7 +56,7 @@ define({
   meta: {
     id: 'WL-CSS-001',
     name: 'CSS expression()',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'IE dynamic CSS expressions. Chrome dropped support: the declaration is discarded, not executed.',
     language: 'css',
     category: 'CSS_COMPAT',
@@ -120,7 +100,7 @@ define({
   meta: {
     id: 'WL-CSS-002',
     name: 'CSS behavior property',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'IE CSS behaviors (.htc components) attach script to elements through the behavior property.',
     language: 'css',
     category: 'CSS_COMPAT',
@@ -164,7 +144,7 @@ define({
   meta: {
     id: 'WL-CSS-003',
     name: 'IE filter (progid / alpha)',
-    version: '1.2.0',
+    version: '1.3.0',
     description: 'IE proprietary filter values: progid:DXImageTransform gradients and alpha(opacity) transparency.',
     language: 'css',
     category: 'CSS_COMPAT',
@@ -287,7 +267,7 @@ define({
   meta: {
     id: 'WL-CSS-004',
     name: 'Vendor -ms- prefixed property',
-    version: '1.0.0',
+    version: '1.1.0',
     description:
       'Microsoft vendor prefixes. Obsolete ones are ignored by Chrome; a few are still implemented and must not be reported as invalid.',
     language: 'css',
@@ -370,7 +350,7 @@ define({
   meta: {
     id: 'WL-CSS-005',
     name: 'IE CSS hack syntax',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'Star property hacks (*zoom), underscore hacks (_height), and the \\9 value hack.',
     language: 'css',
     category: 'CSS_COMPAT',
@@ -420,7 +400,7 @@ define({
   meta: {
     id: 'WL-CSS-006',
     name: 'zoom property',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'The non-standard zoom property is widely used in IE-era layouts for hasLayout fixes.',
     language: 'css',
     category: 'CSS_COMPAT',

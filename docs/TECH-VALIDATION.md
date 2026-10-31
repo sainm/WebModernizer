@@ -1850,3 +1850,38 @@ suite is 279 tests.
 gradients with unsupported colors stay manual.
 
 Suite: 279 tests.
+
+## 47. Forty-third increment — style attributes parsed as declarations
+
+Inline styles were analyzed as one pseudo-declaration whose property was empty. Rules that inspect
+the raw text (`expression()`, star/underscore/value hacks) still found their patterns, but every
+property-based rule — IE `filter`, `zoom`, `-ms-` properties, `behavior` — silently skipped
+`style="..."`. The CSS parser's own comment said inline styles matter; the data model disagreed.
+
+**The parser now emits inline declarations.** `parseInlineStyle` wraps the attribute value in a
+throwaway rule, parses it with PostCSS, and maps each declaration back to file-absolute offsets
+inside the attribute; the raw slice keeps a leading star hack, and a value containing `\9` stays
+intact. If the wrapper fails to parse, the old whole-attribute pseudo is kept so raw-text rules
+still report something. `ParsedFile.inlineCssDeclarations` carries the result, populated from the
+JSP-masked HTML so dynamic regions keep their offsets.
+
+**Rules consume the same stream.** `eachDeclaration` now visits stylesheet declarations and inline
+declarations, one finding per declaration, with the container `style attribute on <tag>`. Expression
+and hack rules therefore report each inline declaration separately instead of once per attribute,
+while property rules finally see inline filters and zooms. Because no recipe can edit a range inside
+an HTML attribute, `normalizeLevel` forces inline findings to MANUAL; the automation level no longer
+promises a rewrite the stylesheet helpers cannot perform. CSS rule versions move to 1.1.0 (003 to
+1.3.0), invalidating incremental reuse.
+
+**Tests and mutations.** Four cases: filter/zoom/-ms-/behavior in one attribute, exact declaration
+offsets inside the attribute, two expression declarations plus a star hack, and the recipe refusal
+with a MANUAL level. Disabling inline collection turned six tests red (including the existing inline
+expression/hack coverage); disabling the inline MANUAL gate turned two red. The bundled fixture's
+two inline expressions keep the same count, so it remains 12 files / 96 findings / 32
+auto-convertible.
+
+**UI.** A demo element with `style="filter: alpha(opacity=50); zoom: 1; behavior: url(...)"` now
+reports three findings on the findings page with their declaration text highlighted, all manual or
+unsupported, and nothing appears as a migration item.
+
+Suite: 283 tests.

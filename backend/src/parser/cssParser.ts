@@ -15,6 +15,8 @@ export interface CssDeclaration {
   selector: string | null;
   /** Chain of enclosing at-rules such as @media / @supports */
   atRuleChain: string[];
+  /** Set for declarations parsed out of an inline style attribute. */
+  inlineContainer?: string;
 }
 
 export interface CssRuleInfo {
@@ -60,6 +62,61 @@ function selectorOf(node: { parent?: unknown }): string | null {
   return null;
 }
 
+export function parseInlineStyle(
+  styleText: string,
+  baseOffset: number,
+  container: string,
+  selector: string,
+): CssDeclaration[] {
+  const prefix = 'x{';
+  const result = parseCssFragment(`${prefix}${styleText}}`, 0, 'inline-style.css');
+  if (!result.root) {
+    return [
+      {
+        prop: '',
+        value: styleText,
+        important: false,
+        startOffset: baseOffset,
+        endOffset: baseOffset + styleText.length,
+        startLine: 0,
+        startColumn: 0,
+        raw: styleText,
+        selector,
+        atRuleChain: [],
+        inlineContainer: container,
+      },
+    ];
+  }
+  const declarations = result.declarations.map((decl) => {
+    const start = baseOffset + decl.startOffset - prefix.length;
+    const end = baseOffset + decl.endOffset - prefix.length;
+    return {
+      ...decl,
+      startOffset: start,
+      endOffset: end,
+      raw: styleText.slice(start - baseOffset, end - baseOffset),
+      selector,
+      atRuleChain: [],
+      inlineContainer: container,
+    };
+  });
+  if (declarations.length > 0) return declarations;
+  return [
+    {
+      prop: '',
+      value: styleText,
+      important: false,
+      startOffset: baseOffset,
+      endOffset: baseOffset + styleText.length,
+      startLine: 0,
+      startColumn: 0,
+      raw: styleText,
+      selector,
+      atRuleChain: [],
+      inlineContainer: container,
+    },
+  ];
+}
 /**
  * Parses a CSS fragment. baseOffset matters for inline <style> blocks: PostCSS
  * reports offsets relative to the input string, and adding baseOffset turns them

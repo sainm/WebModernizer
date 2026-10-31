@@ -6,7 +6,7 @@ import { sha256 } from '../model/ids.js';
 import { LineIndex } from './lineIndex.js';
 import { parseJavaScriptFragment, type JsParseResult } from './jsParser.js';
 import { parseHtml, rawAttributeValue, type HtmlDoc, type P5Node } from './htmlParser.js';
-import { parseCssFragment, type CssParseResult } from './cssParser.js';
+import { parseCssFragment, parseInlineStyle, type CssDeclaration, type CssParseResult } from './cssParser.js';
 import { analyzeJsp, intersectsRegions, type DynamicRegion, type JspAnalysis } from './jspAnalyzer.js';
 
 export interface JsUnit {
@@ -40,6 +40,8 @@ export interface ParsedFile {
   jsUnits: JsUnit[];
   /** Fragments analyzed as CSS, including inline <style> blocks */
   cssUnits: CssUnit[];
+  /** Declarations parsed from inline style attributes, with file-absolute offsets */
+  inlineCssDeclarations: CssDeclaration[];
   html: HtmlDoc | null;
   jsp: JspAnalysis | null;
   dynamicRegions: DynamicRegion[];
@@ -203,6 +205,7 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
   const problems: ParseProblem[] = [];
   const jsUnits: JsUnit[] = [];
   const cssUnits: CssUnit[] = [];
+  const inlineCssDeclarations: CssDeclaration[] = [];
   let html: HtmlDoc | null = null;
   let jsp: JspAnalysis | null = null;
   let dynamicRegions: DynamicRegion[] = [];
@@ -249,6 +252,16 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
     const collected = collectUnits(html, htmlSource, dynamicRegions, problems, file.path);
     jsUnits.push(...collected.jsUnits);
     cssUnits.push(...collected.cssUnits);
+    for (const element of html.elements) {
+      const styleAttr = (element.attrs ?? []).find((attr) => attr.name.toLowerCase() === 'style');
+      if (!styleAttr) continue;
+      const raw = rawAttributeValue(element, 'style', htmlSource);
+      if (!raw || !raw.value.trim()) continue;
+      const tag = (element.tagName ?? '').toLowerCase();
+      inlineCssDeclarations.push(
+        ...parseInlineStyle(raw.value, raw.offset, `style attribute on <${tag}>`, `<${tag} style>`),
+      );
+    }
 
     // parse5 emits a lot of noise; keep only diagnostics that affect structure or location.
     // A .jspf include is a fragment by definition, so "missing doctype" is not a finding
@@ -287,7 +300,7 @@ export function parseSourceFile(file: SourceFile): ParsedFile {
     (file.language === 'css' && cssUnits.some((u) => u.result.root !== null)) ||
     ((file.language === 'html' || file.language === 'jsp') && html !== null && html.elements.length >= 0);
 
-  return { file, index, language: file.language, jsUnits, cssUnits, html, jsp, dynamicRegions, problems, parsed };
+  return { file, index, language: file.language, jsUnits, cssUnits, inlineCssDeclarations, html, jsp, dynamicRegions, problems, parsed };
 }
 
 export function readAndParse(absolutePath: string, relPath: string): ParsedFile {

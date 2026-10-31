@@ -64,7 +64,7 @@ describe('offset mapping', () => {
   it('locates inline event handlers using the attribute value offset', () => {
     const html = ['<html><body>', '<div id="a" onclick = "return window.event.srcElement;">x</div>', '</body></html>'].join('\n');
     const { findings } = analyzeText('page.html', html);
-    const hit = byRule(findings, 'WL-JS-003')[0];
+    const hit = byRule(findings, 'WL-JS-018')[0];
     expect(hit.startLine).toBe(2);
     expect(html.split('\n')[1].slice(hit.startColumn - 1, hit.startColumn - 1 + 12)).toBe('window.event');
   });

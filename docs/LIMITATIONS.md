@@ -35,7 +35,7 @@ the claim, or a disk that loses the file after a successful write.
 
 ## Analysis
 
-**Only the implemented pattern set is detected.** 57 rules cover the IE features listed in the
+**Only the implemented pattern set is detected.** 58 rules cover the IE features listed in the
 specification plus removed APIs found in real legacy code. Anything outside that set is still
 invisible: a legacy `document.body.clientHeight` layout quirk, `event.srcUrn`, `event.recordset`,
 `style.setExpression`, and so on. A clean scan means "none of the covered patterns were found", not
@@ -125,6 +125,15 @@ intersects a JSP dynamic region blocks the group. The per-reference `window.even
 suppressed (in-file during analysis, cross-file in the project pass) and the file row's finding
 count is adjusted. Property rewrites (`srcElement`, `returnValue`, `cancelBubble`) become applicable
 only after a rescan, and the `attachEvent` registration is a separate migration.
+
+**Inline handler attributes are a separate, narrower migration.** An `onclick="..."` attribute
+already receives the standard event object as `event`, so `WL-JS-018` replaces `window.event`
+inside the attribute without any signature or call-site edit. The rule skips dynamic units,
+`onunload`/`onbeforeunload`, attributes that declare their own `event` binding, `window.event`
+inside a nested function, and uses as an assignment target or a `typeof`/`delete` probe. After a
+rescan, the `srcElement`/`returnValue`/`cancelBubble` recipes apply because the bare `event` is
+recognized as the implicit inline-handler argument; `window.event` in script blocks still requires
+the function-level migration.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,
@@ -291,7 +300,8 @@ interrupted run and logs a warning instead of rebuilding them.
 1. **More recipes for the highest-volume patterns** once real projects show which ones dominate.
    The function-level handler signature now covers zero-argument handlers registered by reference,
    same-file inline calls, cross-file inline calls, and parameterized handlers whose call sites are
-   all inline `on*` calls; the next candidates are timer/async uses of `window.event` and
+   all inline `on*` calls; inline attributes rewrite their own `window.event`. The remaining
+   candidates are timers/async callbacks and nested functions that read `window.event`, plus
    by-reference registrations of parameterized handlers, each needing its own precondition argument.
 2. **Broaden detection coverage further.** Remaining examples include `event.srcUrn`,
    `event.recordset`, `style.setExpression` and the layout quirks around

@@ -1,5 +1,9 @@
 import { findEnclosingParam, memberPath, walkJs, type JsNode } from '../../parser/jsParser.js';
-import { findMigratableHandlers } from '../handlers.js';
+import {
+  collectInlineEventUnits,
+  findMigratableHandlers,
+  isInlineEventBinding,
+} from '../handlers.js';
 import type { FileContext, RawFinding, Rule, RuleDraft } from '../types.js';
 import { makeFinding } from '../finding.js';
 
@@ -28,14 +32,19 @@ function propName(node: JsNode): string | null {
 
 const EVENTISH = /^(e|ev|evt|event|myevent|sender)$/i;
 
-/** An object counts as an event only when it is named like one AND is a parameter of the enclosing function. */
-function eventObjectConfidence(node: JsNode, ancestors: JsNode[]): { isEvent: boolean; objectName: string | null } {
+/** An object counts as an event when it is named like one AND is a parameter of the enclosing function, or the implicit event of an inline on* handler. */
+function eventObjectConfidence(
+  node: JsNode,
+  ancestors: JsNode[],
+  unit: FileContext['parsed']['jsUnits'][number],
+): { isEvent: boolean; objectName: string | null } {
   const obj = node.object as JsNode | undefined;
   if (!obj) return { isEvent: false, objectName: null };
   if (obj.type !== 'Identifier') return { isEvent: false, objectName: memberPath(obj) };
   const name = obj.name as string;
   if (!EVENTISH.test(name)) return { isEvent: false, objectName: name };
-  return { isEvent: Boolean(findEnclosingParam(name, ancestors)), objectName: name };
+  const isEvent = Boolean(findEnclosingParam(name, ancestors)) || isInlineEventBinding(unit, name);
+  return { isEvent, objectName: name };
 }
 
 function calleeNamed(node: JsNode, name: string): boolean {
@@ -182,6 +191,9 @@ define({
     for (const handler of findMigratableHandlers(ctx)) {
       for (const start of handler.windowEventStarts) covered.add(start);
     }
+    for (const inlineUnit of collectInlineEventUnits(ctx)) {
+      for (const ref of inlineUnit.refs) covered.add(ref.start ?? -1);
+    }
     eachNode(ctx, (node, _ancestors, unit) => {
       if (node.type !== 'MemberExpression') return;
       if (memberPath(node) !== 'window.event') return;
@@ -309,7 +321,7 @@ define({
       if (node.type !== 'MemberExpression' || propName(node) !== 'srcElement') return;
       // window.event.srcElement is fully covered by WL-JS-003; reporting both would double-count.
       if (memberPath(node.object as JsNode) === 'window.event') return;
-      const { isEvent, objectName } = eventObjectConfidence(node, ancestors);
+      const { isEvent, objectName } = eventObjectConfidence(node, ancestors, unit);
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
           startOffset: node.start ?? 0,
@@ -360,7 +372,7 @@ define({
       const left = node.left as JsNode | undefined;
       const right = node.right as JsNode | undefined;
       if (!left || propName(left) !== 'returnValue') return;
-      const { isEvent, objectName } = eventObjectConfidence(left, ancestors);
+      const { isEvent, objectName } = eventObjectConfidence(left, ancestors, unit);
       const boolValue = right?.type === 'BooleanLiteral' ? (right.value as boolean) : null;
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
@@ -413,7 +425,7 @@ define({
       const left = node.left as JsNode | undefined;
       const right = node.right as JsNode | undefined;
       if (!left || propName(left) !== 'cancelBubble') return;
-      const { isEvent, objectName } = eventObjectConfidence(left, ancestors);
+      const { isEvent, objectName } = eventObjectConfidence(left, ancestors, unit);
       const boolValue = right?.type === 'BooleanLiteral' ? (right.value as boolean) : null;
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
@@ -1213,7 +1225,7 @@ define({
       if (node.type !== 'MemberExpression') return;
       const api = propName(node);
       if (api !== 'toElement' && api !== 'fromElement') return;
-      const confidence = eventObjectConfidence(node, ancestors);
+      const confidence = eventObjectConfidence(node, ancestors, unit);
       if (!confidence.isEvent) return;
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
@@ -1436,7 +1448,7 @@ define({
       if (node.type !== 'MemberExpression') return;
       const api = propName(node);
       if (api === 'propertyName') {
-        const confidence = eventObjectConfidence(node, ancestors);
+        const confidence = eventObjectConfidence(node, ancestors, unit);
         if (!confidence.isEvent) return;
         out.push(
           makeFinding(this as unknown as Rule, ctx, {
@@ -1700,6 +1712,55 @@ define({
               inlineInDefinitionFile: inlineCount > 0,
               handlerStart: handler.start,
               handlerEnd: handler.end,
+            },
+          },
+        }),
+      );
+    }
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-JS-018',
+    name: 'window.event in an inline handler attribute',
+    version: '1.0.0',
+    description:
+      'An inline on* attribute reads the IE-only window.event. Modern inline handlers already receive the event object as event.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'HIGH',
+    defaultMigrationLevel: 'CONDITIONAL',
+    basis:
+      'AST match: window.event inside an on* attribute value, excluding dynamic units, nested functions, shadowing event bindings, and assignment/delete/typeof uses.',
+    recipeId: 'RCP-INLINE-HANDLER-EVENT',
+    tags: ['event', 'window-event', 'inline-handler'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    for (const inlineUnit of collectInlineEventUnits(ctx)) {
+      const first = inlineUnit.refs[0];
+      const count = inlineUnit.refs.length;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: first?.start ?? inlineUnit.start,
+          endOffset: first?.end ?? inlineUnit.end,
+          message: `Inline ${inlineUnit.eventName} handler reads window.event (${count} reference${count === 1 ? '' : 's'})`,
+          risk:
+            'window.event does not exist in Chrome, so the attribute throws as soon as the event fires. Inline handlers already receive the standard event object under the name event, so no signature or call-site change is needed.',
+          recommendation:
+            'Migrate this finding to replace every window.event reference in the attribute with event. Rescan afterwards: the srcElement, returnValue and cancelBubble reads on the inline event then satisfy their own recipes. window.event in script blocks still needs a handler parameter.',
+          evidence: {
+            kind: 'Attribute',
+            matched: ctx.text.slice(inlineUnit.start, inlineUnit.end).slice(0, 200),
+            container: inlineUnit.unit.container,
+            detail: {
+              attribute: inlineUnit.eventName,
+              windowEventCount: count,
+              windowEventStarts: inlineUnit.refs.map((ref) => ref.start ?? -1).join(','),
+              inlineStart: inlineUnit.start,
+              inlineEnd: inlineUnit.end,
             },
           },
         }),

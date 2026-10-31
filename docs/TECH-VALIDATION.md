@@ -1555,3 +1555,47 @@ call site, the preview lists both files as 2/2 applicable, the signature becomes
 `sharedRowClick(event, rowId, this)`.
 
 Suite: 245 tests.
+
+## 39. Thirty-fifth increment — window.event inside the attribute itself
+
+The handler work covered functions, by-reference registrations and calls made from inline
+attributes, but not the attribute's own code. An element such as
+`onclick="window.event.cancelBubble = true; window.event.returnValue = false"` produced two
+`WL-JS-003` findings plus two property findings, all MANUAL, even though an inline handler already
+receives the standard event object as `event`. No signature or call-site change is needed.
+
+**A separate rule with a separate recipe.** `WL-JS-018` fires once per inline `on*` attribute that
+reads `window.event`; the finding is anchored at the first reference and records the attribute, the
+reference count and the unit's start/end. `RCP-INLINE-HANDLER-EVENT` re-locates the unit, verifies
+the reference count, and replaces every `window.event` span with `event`. It never touches script
+blocks, where `event` is not in scope.
+
+**The guards are part of eligibility.** A unit is skipped when: it is dynamic; it is
+`onunload`/`onbeforeunload`; any binding named `event` exists (parameters, `var`/`let`/`const`,
+function/class names, catch params, imports); any `window.event` sits inside a nested function; or
+any reference is an assignment target, update target, or `typeof`/`delete` operand. A unit with one
+clean reference and one blocked reference is excluded whole, so the finding never claims a partial
+rewrite. `WL-JS-003` suppresses the references covered by an eligible unit, the same way it already
+suppresses handler-covered references.
+
+**The property recipes recognize the implicit binding.** After the rewrite and a rescan,
+`event.cancelBubble = true` and `event.returnValue = false` must become applicable even though
+`event` is not a parameter. `eventObjectConfidence` and the recipes' `isEventObject` now accept the
+implicit event of an inline unit when that unit has no `event` binding, so both sides agree:
+`WL-JS-008` reaches SAFE and `WL-JS-007` CONDITIONAL, and their recipes fire.
+
+**Tests and mutations.** Five cases: the finding shape and suppression, the full chain
+(window.event rewrite → rescan → stopPropagation/preventDefault), a negative group (top-level plus
+nested reference, shadowed `event`, assignment target, `typeof` probe, script block), unload
+exclusion, and the zh/ja messages. Disabling the nested-function guard, the shadowing guard, the
+write/probe guard, the implicit-binding recognition, or the `WL-JS-003` suppression each turned its
+test red. The parser offset test now asserts on `WL-JS-018`, since the inline reference is no longer
+reported as `WL-JS-003`. The bundled fixture is unchanged at 12 files / 96 findings / 29
+auto-convertible because its only inline attributes call functions and do not read `window.event`.
+
+**UI.** A demo page with
+`onclick="window.event.cancelBubble = true; window.event.returnValue = false"` previews as a
+single-item plan; after applying it the attribute reads `event.cancelBubble` / `event.returnValue`,
+and a rescan turns the two property findings applicable.
+
+Suite: 250 tests.

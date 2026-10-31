@@ -50,6 +50,11 @@ export const FIXTURES: Fixture[] = [
     file: 'r.js',
     code: "function onRowClick() { window.event.cancelBubble = true; }\nel.attachEvent('onclick', onRowClick);",
   },
+  {
+    id: 'WL-JS-018',
+    file: 'r.html',
+    code: '<html><body><input type="button" onclick="window.event.cancelBubble = true;" /></body></html>',
+  },
 
   { id: 'WL-HTML-001', file: 'r.html', code: '<html><body><!--[if IE]><p>only ie</p><![endif]--></body></html>' },
   { id: 'WL-HTML-002', file: 'r.html', code: '<html><body><marquee>notice</marquee></body></html>' },

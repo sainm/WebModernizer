@@ -1,17 +1,20 @@
 import {
   findHandlerAt,
+  findInlineEventUnitAt,
   findInlineHandlerCalls,
   handlerParamEdit,
   inlineCallEventEdit,
+  isInlineEventBinding,
 } from '../analysis/handlers.js';
 import { findEnclosingParam, walkJs, type JsNode } from '../parser/jsParser.js';
-import type { ParsedFile } from '../parser/index.js';
+import type { JsUnit, ParsedFile } from '../parser/index.js';
 import type { AnalysisFinding, TextEdit } from '../model/types.js';
 import type { PreconditionResult, Recipe, RecipeContext } from './types.js';
 
 interface NodeHit {
   node: JsNode;
   ancestors: JsNode[];
+  unit: JsUnit;
 }
 
 /**
@@ -26,7 +29,7 @@ export function findNodeByRange(parsed: ParsedFile, start: number, end: number):
     walkJs(unit.result.ast, (node, _parent, ancestors) => {
       if (node.start !== start || node.end !== end) return;
       // Prefer the innermost node when ranges coincide (e.g. a parenthesized wrapper).
-      if (!best || ancestors.length > best.ancestors.length) best = { node, ancestors };
+      if (!best || ancestors.length > best.ancestors.length) best = { node, ancestors, unit };
     });
   }
   return best;
@@ -44,11 +47,14 @@ function objectText(node: JsNode, ctx: RecipeContext): string | null {
   return ctx.text.slice(obj.start, obj.end);
 }
 
-function isEventObject(node: JsNode, ancestors: JsNode[]): { ok: boolean; name: string | null } {
+function isEventObject(node: JsNode, ancestors: JsNode[], unit: JsUnit): { ok: boolean; name: string | null } {
   const obj = node.object as JsNode | undefined;
   if (!obj || obj.type !== 'Identifier') return { ok: false, name: null };
   const name = obj.name as string;
-  return { ok: Boolean(findEnclosingParam(name, ancestors)), name };
+  return {
+    ok: Boolean(findEnclosingParam(name, ancestors)) || isInlineEventBinding(unit, name),
+    name,
+  };
 }
 
 function quotedLike(raw: string, value: string): string {
@@ -73,7 +79,7 @@ const srcElementRecipe: Recipe = {
     if (!prop || prop.name !== 'srcElement') {
       return { ok: false, reasons: ['The code has changed: the member is no longer .srcElement.'] };
     }
-    const event = isEventObject(hit.node, hit.ancestors);
+    const event = isEventObject(hit.node, hit.ancestors, hit.unit);
     if (!event.ok) {
       return {
         ok: false,
@@ -121,7 +127,7 @@ const cancelBubbleRecipe: Recipe = {
     if (right?.type !== 'BooleanLiteral' || right.value !== true) {
       return { ok: false, reasons: ['cancelBubble is not assigned the literal true, so stopPropagation() is not equivalent.'] };
     }
-    const event = isEventObject(left as JsNode, hit.ancestors);
+    const event = isEventObject(left as JsNode, hit.ancestors, hit.unit);
     if (!event.ok) return { ok: false, reasons: ['The object is not an event parameter of the enclosing function.'] };
     return { ok: true, reasons: [] };
   },
@@ -167,7 +173,7 @@ const returnValueRecipe: Recipe = {
     if (right?.type !== 'BooleanLiteral' || right.value !== false) {
       return { ok: false, reasons: ['Only returnValue = false maps to preventDefault().'] };
     }
-    const event = isEventObject(left as JsNode, hit.ancestors);
+    const event = isEventObject(left as JsNode, hit.ancestors, hit.unit);
     if (!event.ok) return { ok: false, reasons: ['The object is not an event parameter of the enclosing function.'] };
     return { ok: true, reasons: ['Verify the event is cancelable and the listener is not passive.'] };
   },
@@ -572,6 +578,52 @@ const handlerEventParamRecipe: Recipe = {
   },
 };
 
+const inlineHandlerEventRecipe: Recipe = {
+  id: 'RCP-INLINE-HANDLER-EVENT',
+  name: 'inline window.event -> event argument',
+  version: '1.0.0',
+  ruleIds: ['WL-JS-018'],
+  level: 'CONDITIONAL',
+  summary: 'Replaces window.event with the event argument that inline on* handlers already receive.',
+  caveats: [
+    'Only on* attribute values are rewritten; window.event in script blocks still needs a handler parameter or a call-site change.',
+    'The attribute must not declare an event binding, use window.event as an assignment target, or probe it with typeof/delete.',
+    'The returnValue/cancelBubble conversions become separate findings after a rescan.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const start = Number(finding.evidence.detail.inlineStart);
+    if (!Number.isFinite(start)) {
+      return { ok: false, reasons: ['The evidence does not identify an inline handler.'] };
+    }
+    const inlineUnit = findInlineEventUnitAt(ctx, start);
+    if (!inlineUnit) {
+      return { ok: false, reasons: ['The inline handler no longer reads window.event in a migratable position.'] };
+    }
+    const expected = Number(finding.evidence.detail.windowEventCount);
+    if (Number.isFinite(expected) && expected !== inlineUnit.refs.length) {
+      return { ok: false, reasons: ['The number of window.event references changed; rescan the file.'] };
+    }
+    return { ok: true, reasons: ['Inline handlers receive the standard event object as event.'] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const start = Number(finding.evidence.detail.inlineStart);
+    const inlineUnit = findInlineEventUnitAt(ctx, start);
+    if (!inlineUnit) return null;
+    const edits: TextEdit[] = [];
+    for (const ref of inlineUnit.refs) {
+      if (typeof ref.start !== 'number' || typeof ref.end !== 'number') return null;
+      edits.push({
+        start: ref.start,
+        end: ref.end,
+        newText: 'event',
+        ruleId: 'WL-JS-018',
+        reason: 'Inline on* handlers already receive the standard event object under the name event.',
+      });
+    }
+    return edits;
+  },
+};
+
 export const jsRecipes: Recipe[] = [
   srcElementRecipe,
   cancelBubbleRecipe,
@@ -583,4 +635,5 @@ export const jsRecipes: Recipe[] = [
   navigateRecipe,
   cssRulesRecipe,
   handlerEventParamRecipe,
+  inlineHandlerEventRecipe,
 ];

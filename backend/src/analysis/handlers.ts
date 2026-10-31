@@ -1,5 +1,6 @@
 import type { JsNode } from '../parser/jsParser.js';
 import { memberPath, walkJs } from '../parser/jsParser.js';
+import type { JsUnit } from '../parser/index.js';
 import type { FileContext } from './types.js';
 
 export interface HandlerDefinitionFact {
@@ -80,6 +81,114 @@ function inlineEventName(container: string): string | null {
   const match = /^([a-zA-Z][\w:-]*) attribute \(<[^>]+>\)$/.exec(container);
   if (!match) return null;
   return normalizeEventName(match[1]);
+}
+
+function bindingIdentifiers(pattern: JsNode | null | undefined, out: Set<string>): void {
+  if (!pattern) return;
+  if (pattern.type === 'Identifier') {
+    out.add(String(pattern.name));
+    return;
+  }
+  if (pattern.type === 'RestElement') {
+    bindingIdentifiers(pattern.argument as JsNode | undefined, out);
+    return;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    bindingIdentifiers(pattern.left as JsNode | undefined, out);
+    return;
+  }
+  if (pattern.type === 'ArrayPattern') {
+    for (const item of (pattern.elements as JsNode[] | undefined) ?? []) bindingIdentifiers(item, out);
+    return;
+  }
+  if (pattern.type === 'ObjectPattern') {
+    for (const prop of (pattern.properties as JsNode[] | undefined) ?? []) {
+      if (prop.type === 'ObjectProperty') bindingIdentifiers(prop.value as JsNode | undefined, out);
+      else bindingIdentifiers(prop, out);
+    }
+  }
+}
+
+function unitBindings(unit: JsUnit): Set<string> {
+  const names = new Set<string>();
+  if (!unit.result.ast) return names;
+  walkJs(unit.result.ast, (node) => {
+    if (isFunctionNode(node)) {
+      for (const param of (node.params as JsNode[] | undefined) ?? []) bindingIdentifiers(param, names);
+      return;
+    }
+    if (node.type === 'VariableDeclarator') {
+      bindingIdentifiers(node.id as JsNode | undefined, names);
+      return;
+    }
+    if (node.type === 'CatchClause') {
+      bindingIdentifiers(node.param as JsNode | undefined, names);
+      return;
+    }
+    if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') {
+      bindingIdentifiers(node.id as JsNode | undefined, names);
+      return;
+    }
+    if (
+      node.type === 'ImportSpecifier' ||
+      node.type === 'ImportDefaultSpecifier' ||
+      node.type === 'ImportNamespaceSpecifier'
+    ) {
+      bindingIdentifiers(node.local as JsNode | undefined, names);
+    }
+  });
+  return names;
+}
+
+export interface InlineEventUnit {
+  unit: JsUnit;
+  eventName: string;
+  refs: JsNode[];
+  start: number;
+  end: number;
+}
+
+function blockedWindowEventUse(node: JsNode, ancestors: JsNode[]): boolean {
+  if (nearestFunction(ancestors)) return true;
+  const parent = ancestors[ancestors.length - 1];
+  if (!parent) return false;
+  if ((parent.type === 'AssignmentExpression' || parent.type === 'AssignmentPattern') && parent.left === node) return true;
+  if (parent.type === 'UpdateExpression' && parent.argument === node) return true;
+  return parent.type === 'UnaryExpression' && (parent.operator === 'delete' || parent.operator === 'typeof');
+}
+
+export function collectInlineEventUnits(ctx: Pick<FileContext, 'parsed'>): InlineEventUnit[] {
+  const result: InlineEventUnit[] = [];
+  for (const unit of ctx.parsed.jsUnits) {
+    if (!unit.result.ast || unit.dynamic) continue;
+    const eventName = inlineEventName(unit.container);
+    if (!eventName) continue;
+    if (unitBindings(unit).has('event')) continue;
+    const refs: JsNode[] = [];
+    let blocked = false;
+    walkJs(unit.result.ast, (node, _parent, ancestors) => {
+      if (blocked || node.type !== 'MemberExpression' || memberPath(node) !== 'window.event') return;
+      if (blockedWindowEventUse(node, ancestors)) {
+        blocked = true;
+        return;
+      }
+      refs.push(node);
+    });
+    if (blocked || refs.length === 0) continue;
+    refs.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+    result.push({ unit, eventName, refs, start: unit.baseOffset, end: unit.baseOffset + unit.code.length });
+  }
+  return result;
+}
+
+export function findInlineEventUnitAt(ctx: Pick<FileContext, 'parsed'>, start: number): InlineEventUnit | null {
+  return collectInlineEventUnits(ctx).find((item) => item.start === start) ?? null;
+}
+
+export function isInlineEventBinding(unit: JsUnit, name: string): boolean {
+  if (!unit.result.ast || unit.dynamic) return false;
+  if (!inlineEventName(unit.container)) return false;
+  return name === 'event' && !unitBindings(unit).has('event');
 }
 
 function paramRange(ctx: Pick<FileContext, 'text'>, node: JsNode): { open: number; close: number } | null {

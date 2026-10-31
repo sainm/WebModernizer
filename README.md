@@ -62,14 +62,15 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 245 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 250 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
                 #            cross-process project locks, bounded lock waits,
                 #            remaining IE-only detection, handler signature migration,
                 #            cross-file handler migration, inline handler calls,
-                #            cross-file inline calls, handlers with existing parameters
+                #            cross-file inline calls, handlers with existing parameters,
+                #            inline attribute window.event
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -85,7 +86,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | File discovery with symlink/traversal guards, binary and size filtering | done |
 | HTML, JavaScript, CSS parsing with source locations | done |
 | JSP: layered analysis of the static fragments, dynamic regions masked | done |
-| 57 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
+| 58 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
 | Scan pipeline with phases, SSE progress, cancel, persistence | done |
 | Crash-resumable scans: atomic batches during the run, stale RUNNING runs reclaimed, prefix reused | done |
 | Manual fix verification: mark fixed in code, next comparable scan records VALIDATED / VALIDATION_FAILED | done |
@@ -97,6 +98,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | Cross-file handler migration: a function defined in a shared file and registered by reference in another file | done |
 | Inline handler calls: same-file or cross-file, with cross-file call sites linked as companions in one multi-file plan | done |
 | Handlers with existing parameters: offered only when every call site is an inline on* call, so event is inserted first everywhere | done |
+| Inline handler attributes: replace window.event with the event argument the attribute already receives, then unlock the property recipes | done |
 | Static validation after migration | done |
 | Encoding-faithful write-back for non-UTF-8 sources (Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16, UTF-8 BOM) | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
@@ -237,20 +239,20 @@ detected and that findings inside it land on the correct line.
 | # | Criterion | Where |
 | --- | --- | --- |
 | 1 | Scan a given local legacy project | `POST /api/projects/:id/scans`, CLI |
-| 2 | Classify the covered IE issues | 57 rules, `docs/RULES.md` |
+| 2 | Classify the covered IE issues | 58 rules, `docs/RULES.md` |
 | 3 | Every finding locates file + position | `analysis/engine.ts`, verified in tests |
 | 4 | Evidence and recommendation per finding | `AnalysisFinding.risk/recommendation/evidence` |
 | 5 | Dashboard → findings | Scan detail cards link into the explorer |
 | 6 | Filter down to a specific problem | Findings explorer (severity/level/status/category/rule/path/search) |
 | 7 | Confirmed page↔script references | `analysis/projectReferences.ts`, dependency view |
 | 8 | Report parse failures and unknown deps | `parse_problem` table, `UNKNOWN` edges |
-| 9 | Preview at least one real transformation | 14 recipes, `POST /api/migrations/preview` |
+| 9 | Preview at least one real transformation | 15 recipes, `POST /api/migrations/preview` |
 | 10 | See the diff before/after | Monaco side-by-side diff |
 | 11 | No silent overwrite on failure | temp write → re-parse → rename, backup restore |
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 245 tests |
+| 15 | Automated tests for core behaviour | 250 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

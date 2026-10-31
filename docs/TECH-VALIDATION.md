@@ -1599,3 +1599,45 @@ single-item plan; after applying it the attribute reads `event.cancelBubble` / `
 and a rescan turns the two property findings applicable.
 
 Suite: 250 tests.
+
+## 40. Thirty-sixth increment — a nested helper the handler calls synchronously
+
+Handler analysis used to reject any `window.event` inside a nested function; the test suite even
+asserted that a returned closure blocked the finding. A helper declared inside the handler and
+invoked synchronously during dispatch is different: the injected event parameter is already in
+scope, so the rewrite is a closure capture, not a behavioural change.
+
+**Nested references are now classified.** `inspectHandlerBody` partitions `window.event` references
+by their nearest enclosing function. References in the handler's own body are always included. A
+reference inside a nested function is included only when that function is a `FunctionDeclaration`
+directly inside the handler, is not async or a generator, contains no `event` read or binding in its
+own scope, is referenced only as a direct call callee, and has at least one such call in the
+handler's top-level body. A returned closure, a callback passed to `setTimeout`, a `.call`, a call
+inside another callback or a deeper nesting still sets `nestedRef` and blocks the finding.
+
+**Why closure capture is correct.** The helper runs synchronously while the handler's event
+parameter is live. The recipe injects `event` at the signature and replaces every included reference
+with `event`, including those inside the helper; no call site changes. After a rescan,
+`findEnclosingParam` walks past the helper to the outer handler, so the `srcElement`,
+`returnValue` and `cancelBubble` recipes treat the captured object as an event argument and apply.
+
+**Facts and cross-file paths share the inspection.** `collectHandlerFacts` and `findHandlerAt` call
+the same `inspectHandlerBody`, so by-reference and cross-file definition findings include the nested
+spans, suppress their `WL-JS-003` rows, and replace them when the recipe runs. The recipe version
+moved to 1.5.0 (rule 1.5.0), so an old incremental result is not reused.
+
+**Tests and mutations.** Four cases: one synchronously called helper, two helpers, the full chain
+through a rescan to `stopPropagation()`/`preventDefault()`, and a cross-file by-reference definition
+whose helper is rewritten through the persisted facts. Negatives: a returned closure, a
+helper both called and returned, a helper passed to `setTimeout`, a call inside a timer callback,
+`.call`, an async helper, a helper that binds `event`, a helper never called, an unsafe helper next
+to a safe one, and a deeper nested function. Disabling the synchronous-use check, the call-site
+requirement, the event-shadow check, or the async check each turned a test red. The bundled fixture
+is unchanged at 12 files / 96 findings / 29 auto-convertible.
+
+**UI.** A demo handler with `function mark()` reading `window.event` twice: the finding reports two
+references, the diff injects `event` into `onRowClick` and rewrites both references inside `mark()`,
+and after a rescan the two property recipes are applicable while `attachEvent` remains a separate
+conditional finding.
+
+Suite: 254 tests.

@@ -30,6 +30,9 @@ All notable changes to WebLift are recorded here. The format follows
 - Handler sources now include by-reference registrations in another scanned file, inline `on*`
   calls in the same file, cross-file inline calls linked as companion findings in one multi-file
   plan, and handlers with existing parameters whose call sites are all inline `on*` calls.
+- Handler migration now rewrites `window.event` inside a nested helper when the handler calls it
+  synchronously from its own body; returned, passed, timer-invoked, async or deeper-nested helpers
+  still block the finding.
 - Inline handler attributes that read `window.event` (`WL-JS-018` / `RCP-INLINE-HANDLER-EVENT`):
   the attribute already receives `event`, so every reference is replaced in place, and after a
   rescan the `srcElement`/`returnValue`/`cancelBubble` recipes apply to the inline event.
@@ -41,7 +44,7 @@ All notable changes to WebLift are recorded here. The format follows
 - The rule and recipe catalog is now 58 rules and 15 recipes; the fixture remains at 12 files,
   96 findings, 41 high risk, 29 auto-convertible (10 SAFE, 19 CONDITIONAL), 57 manual and 10
   unsupported.
-- The automated suite is now 250 tests, including mutation-checked guards for the new handler,
+- The automated suite is now 254 tests, including mutation-checked guards for the new handler,
   inline-attribute and locking paths.
 
 ### Fixed

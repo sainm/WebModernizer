@@ -108,11 +108,14 @@ that a human must confirm.
 all of these hold across the scanned files: a registration by reference through `attachEvent`,
 `detachEvent`, `addEventListener`, `removeEventListener` or an `on*` property; the function name has
 no other use anywhere in the scanned files (a direct call, timer or callback blocks it); no
-`window.event` inside a nested function; no `arguments` use; no local `event` binding or parameter
-named `event`; and not `beforeunload`/`unload`. A handler with existing parameters is offered only
-when every call site is an inline `on*` call, because a by-reference registration would pass the
-browser event into the old first parameter instead of the new one. The recipe injects `event` first
-and replaces the handler's own `window.event` references. For a cross-file registration the finding is emitted in the definition file (a `.js`
+`arguments` use; no local `event` binding or parameter named `event`; and not
+`beforeunload`/`unload`. A nested helper may read `window.event` only when it is declared in the
+handler, called directly from the handler body, not async or a generator, and does not bind
+`event`; a returned, passed, timer-invoked or deeper-nested helper blocks the finding. A handler
+with existing parameters is offered only when every call site is an inline `on*` call, because a
+by-reference registration would pass the browser event into the old first parameter instead of the
+new one. The recipe injects `event` first and replaces the handler's `window.event` references,
+including those in a synchronously called helper. For a cross-file registration the finding is emitted in the definition file (a `.js`
 file), the registration file is not edited, and preview verifies that the registration file still
 has the hash it had at scan time; if it changed, the finding is blocked until a rescan. Inline
 `on*="fn(...)"` calls in the same or another file are a source; existing arguments are kept and
@@ -300,9 +303,10 @@ interrupted run and logs a warning instead of rebuilding them.
 1. **More recipes for the highest-volume patterns** once real projects show which ones dominate.
    The function-level handler signature now covers zero-argument handlers registered by reference,
    same-file inline calls, cross-file inline calls, and parameterized handlers whose call sites are
-   all inline `on*` calls; inline attributes rewrite their own `window.event`. The remaining
-   candidates are timers/async callbacks and nested functions that read `window.event`, plus
-   by-reference registrations of parameterized handlers, each needing its own precondition argument.
+   all inline `on*` calls; inline attributes rewrite their own `window.event`; synchronous nested
+   helpers are covered. The remaining candidates are timers/async callbacks that read
+   `window.event` (they need a capture decision) and by-reference registrations of parameterized
+   handlers, each needing its own precondition argument.
 2. **Broaden detection coverage further.** Remaining examples include `event.srcUrn`,
    `event.recordset`, `style.setExpression` and the layout quirks around
    `document.body.clientHeight`. Each needs a rule, metadata and a firing fixture before it can be

@@ -100,7 +100,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-EXECSCRIPT | execScript -> indirect eval | CONDITIONAL | WL-JS-014 | Replaces window.execScript(code) with (0, eval)(code), which also evaluates in global scope. |
 | RCP-NAVIGATE | window.navigate -> location.assign | CONDITIONAL | WL-JS-016 | Replaces the IE navigation call with location.assign on the same argument. |
 | RCP-CSSRULES | styleSheet.rules -> cssRules | CONDITIONAL | WL-DOM-003 | Renames the property access on a stylesheet object. |
-| RCP-HANDLER-EVENT-PARAM | window.event handler -> event parameter | CONDITIONAL | WL-JS-017 | Adds an event parameter to a handler, replaces window.event, and passes event first from inline on* calls while keeping existing parameters and arguments in order. |
+| RCP-HANDLER-EVENT-PARAM | window.event handler -> event parameter | CONDITIONAL | WL-JS-017 | Adds an event parameter to a handler, replaces window.event (including in a synchronously called nested helper), and passes event first from inline on* calls while keeping existing parameters and arguments in order. |
 | RCP-INLINE-HANDLER-EVENT | inline window.event -> event argument | CONDITIONAL | WL-JS-018 | Replaces window.event with the event argument that inline on* handlers already receive. |
 | RCP-SCRIPT-LANGUAGE | Remove obsolete script language attribute | SAFE | WL-HTML-003 | Deletes language="JavaScript" from the <script> tag; Chrome infers the type anyway. |
 | RCP-DROP-UA-COMPATIBLE | Remove X-UA-Compatible document mode | SAFE | WL-HTML-008 | Deletes the IE document-mode <meta> tag, which Chrome ignores. |

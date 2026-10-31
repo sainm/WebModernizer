@@ -252,6 +252,47 @@ export function inlineCallEventEdit(
   return { offset: calleeEnd + open + 1, text: 'event' };
 }
 
+function scopeReadsEventIdentifier(fn: JsNode): boolean {
+  let found = false;
+  walkJs(fn, (node, parent, ancestors) => {
+    if (found) return;
+    const ownScope = node === fn || nearestFunction(ancestors) === fn;
+    if (!ownScope || node.type !== 'Identifier' || node.name !== 'event') return;
+    const parentNode = parent as JsNode | null;
+    const memberProp = parentNode?.type === 'MemberExpression' ? (parentNode.property as JsNode | undefined) : undefined;
+    const objectKey = parentNode?.type === 'ObjectProperty' ? (parentNode.key as JsNode | undefined) : undefined;
+    const isProperty =
+      (parentNode?.type === 'MemberExpression' && memberProp === node && !parentNode.computed) ||
+      (parentNode?.type === 'ObjectProperty' &&
+        objectKey === node &&
+        !parentNode.computed &&
+        (parentNode as Record<string, unknown>).shorthand !== true);
+    if (!isProperty) found = true;
+  });
+  return found;
+}
+
+function helperSynchronousUses(fn: JsNode, helper: JsNode): { ok: boolean; calls: number } {
+  const id = helper.id as JsNode | undefined;
+  if (!id || id.type !== 'Identifier') return { ok: false, calls: 0 };
+  const name = String(id.name);
+  let ok = true;
+  let calls = 0;
+  walkJs(fn, (node, parent, ancestors) => {
+    if (node.type !== 'Identifier' || node.name !== name || node === id) return;
+    if (!(parent?.type === 'CallExpression' && parent.callee === node)) {
+      ok = false;
+      return;
+    }
+    if (nearestFunction(ancestors) !== fn) {
+      ok = false;
+      return;
+    }
+    calls += 1;
+  });
+  return { ok, calls };
+}
+
 function inspectHandlerBody(fn: JsNode): {
   refs: JsNode[];
   nestedRef: boolean;
@@ -259,42 +300,39 @@ function inspectHandlerBody(fn: JsNode): {
   eventBinding: boolean;
 } {
   const refs: JsNode[] = [];
+  const helperRefs = new Map<JsNode, JsNode[]>();
   let nestedRef = false;
   let hasArguments = false;
-  let eventBinding = false;
-  walkJs(fn, (node, parent, ancestors) => {
-    const ownScope = node === fn || nearestFunction(ancestors) === fn;
+  walkJs(fn, (node, _parent, ancestors) => {
+    const functions = ancestors.filter(isFunctionNode);
+    const nearest = functions[functions.length - 1] ?? null;
+    const outer = functions[functions.length - 2] ?? null;
+    const ownScope = node === fn || nearest === fn;
     if (node.type === 'MemberExpression' && memberPath(node) === 'window.event') {
       if (ownScope) refs.push(node);
-      else nestedRef = true;
+      else if (nearest && nearest.type === 'FunctionDeclaration' && outer === fn) {
+        const list = helperRefs.get(nearest) ?? [];
+        list.push(node);
+        helperRefs.set(nearest, list);
+      } else nestedRef = true;
     }
-    if (!ownScope) return;
-    if (node.type === 'Identifier' && node.name === 'arguments') hasArguments = true;
-    if (node.type === 'Identifier' && node.name === 'event') {
-      const parentNode = parent as JsNode | null;
-      const memberProp = parentNode?.type === 'MemberExpression' ? (parentNode.property as JsNode | undefined) : undefined;
-      const objectKey = parentNode?.type === 'ObjectProperty' ? (parentNode.key as JsNode | undefined) : undefined;
-      const isProperty =
-        (parentNode?.type === 'MemberExpression' && memberProp === node && !parentNode.computed) ||
-        (parentNode?.type === 'ObjectProperty' &&
-          objectKey === node &&
-          !parentNode.computed &&
-          (parentNode as Record<string, unknown>).shorthand !== true);
-      if (!isProperty) eventBinding = true;
-    }
-    if (node.type === 'VariableDeclarator') {
-      const id = node.id as JsNode | undefined;
-      if (id?.type === 'Identifier' && id.name === 'event') eventBinding = true;
-    }
-    if (node.type === 'FunctionDeclaration') {
-      const id = node.id as JsNode | undefined;
-      if (id?.type === 'Identifier' && id.name === 'event') eventBinding = true;
-    }
-    if (node.type === 'CatchClause') {
-      const param = node.param as JsNode | undefined;
-      if (param?.type === 'Identifier' && param.name === 'event') eventBinding = true;
-    }
+    if (ownScope && node.type === 'Identifier' && node.name === 'arguments') hasArguments = true;
   });
+  for (const [helper, list] of helperRefs) {
+    const uses = helperSynchronousUses(fn, helper);
+    if (
+      helper.async === true ||
+      helper.generator === true ||
+      scopeReadsEventIdentifier(helper) ||
+      !uses.ok ||
+      uses.calls === 0
+    ) {
+      nestedRef = true;
+      continue;
+    }
+    refs.push(...list);
+  }
+  const eventBinding = scopeReadsEventIdentifier(fn);
   return { refs, nestedRef, hasArguments, eventBinding };
 }
 

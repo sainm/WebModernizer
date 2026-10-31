@@ -107,6 +107,29 @@ describe('cross-file handler migration', () => {
     expect(finished).toContain('event.stopPropagation()');
   });
 
+  it('rewrites a synchronous helper in a cross-file definition', async () => {
+    const shared = `function sharedRowClick() {
+  function mark() { window.event.cancelBubble = true; }
+  mark();
+}
+`;
+    const { root, store, service, scan } = await setup({ [SHARED]: shared, [PAGE]: PAGE_SOURCE });
+    const first = await scan();
+    const handlers = findingsIn(store, first.id, SHARED).filter((finding) => finding.ruleId === 'WL-JS-017');
+    expect(handlers).toHaveLength(1);
+    expect(Number(handlers[0].evidence.detail.windowEventCount)).toBe(1);
+    expect(findingsIn(store, first.id, SHARED).filter((finding) => finding.ruleId === 'WL-JS-003')).toHaveLength(0);
+
+    const plan = service.preview({ scanTaskId: first.id, findingIds: [handlers[0].id] });
+    expect(plan.items[0].applicable).toBe(true);
+    const result = await service.execute(first.id, [handlers[0].id]);
+    expect(result.ok).toBe(true);
+    const rewritten = readFileSync(join(root, SHARED), 'utf8');
+    expect(rewritten).toContain('function sharedRowClick(event)');
+    expect(rewritten).toContain('event.cancelBubble = true;');
+    expect(rewritten.includes('window.event')).toBe(false);
+  });
+
   it('does not offer a handler with parameters that is registered by reference', async () => {
     const shared = `function sharedRowClick(sender) {
   var cell = window.event.srcElement;

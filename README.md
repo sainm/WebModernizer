@@ -62,7 +62,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 250 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 254 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
@@ -70,7 +70,7 @@ npm test        # 250 tests: parser, rules, per-rule coverage, rule metadata, me
                 #            remaining IE-only detection, handler signature migration,
                 #            cross-file handler migration, inline handler calls,
                 #            cross-file inline calls, handlers with existing parameters,
-                #            inline attribute window.event
+                #            inline attribute window.event, nested handler helpers
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -94,7 +94,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | Dashboard, findings explorer with 3-pane layout + Monaco source view | done |
 | Cross-file reference graph with CONFIRMED / INFERRED / UNKNOWN edges | done |
 | 14 migration recipes with preview diff, hash-verified apply, batch rollback | done |
-| Function-level handler migration: inject event first and replace window.event, keeping existing parameters and arguments in order | done |
+| Function-level handler migration: inject event first and replace window.event, including in a nested helper called synchronously, keeping parameters and arguments in order | done |
 | Cross-file handler migration: a function defined in a shared file and registered by reference in another file | done |
 | Inline handler calls: same-file or cross-file, with cross-file call sites linked as companions in one multi-file plan | done |
 | Handlers with existing parameters: offered only when every call site is an inline on* call, so event is inserted first everywhere | done |
@@ -252,7 +252,7 @@ detected and that findings inside it land on the correct line.
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 250 tests |
+| 15 | Automated tests for core behaviour | 254 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

@@ -1,5 +1,5 @@
 import { rawAttributeValue } from '../../parser/htmlParser.js';
-import { alphaOpacityValue, standardForMs } from '../cssStandards.js';
+import { alphaOpacityValue, ieGradientValue, standardForMs } from '../cssStandards.js';
 import type { CssDeclaration } from '../../parser/cssParser.js';
 import type { FileContext, RawFinding, Rule, RuleDraft } from '../types.js';
 import { makeFinding } from '../finding.js';
@@ -164,14 +164,14 @@ define({
   meta: {
     id: 'WL-CSS-003',
     name: 'IE filter (progid / alpha)',
-    version: '1.1.0',
+    version: '1.2.0',
     description: 'IE proprietary filter values: progid:DXImageTransform gradients and alpha(opacity) transparency.',
     language: 'css',
     category: 'CSS_COMPAT',
     defaultSeverity: 'MEDIUM',
     defaultMigrationLevel: 'MANUAL',
-    basis: 'Property -ms-filter, or property filter whose value contains progid: or alpha(opacity. An alpha-only value is automatable.',
-    recipeId: 'RCP-FILTER-OPACITY',
+    basis: 'Property -ms-filter, or property filter whose value contains progid: or alpha(opacity. Alpha-only and simple two-color gradient values are automatable.',
+    recipeId: 'RCP-IE-FILTER',
     tags: ['ie-only', 'filter'],
   },
   detect(ctx) {
@@ -185,6 +185,7 @@ define({
       const isOpacity = /alpha\s*\(\s*opacity/i.test(value);
       const isGradient = /gradient/i.test(value);
       const opacity = isOpacity ? alphaOpacityValue(value) : null;
+      const gradient = isGradient ? ieGradientValue(value) : null;
       out.push(
         makeFinding(asRule(this), ctx, {
           startOffset: hit.offset,
@@ -192,16 +193,18 @@ define({
           severity: 'MEDIUM',
           message: isOpacity ? 'Uses IE alpha(opacity) for transparency' : 'Uses IE filter progid:DXImageTransform',
           variant: isOpacity ? 'opacity' : 'gradient',
-          migrationLevel: opacity !== null ? 'CONDITIONAL' : 'MANUAL',
+          migrationLevel: opacity !== null || gradient !== null ? 'CONDITIONAL' : 'MANUAL',
           risk: isGradient
             ? 'Chrome ignores the IE gradient filter, so the element renders without any background gradient. Fallback colors may still apply, which hides the problem on some pages and exposes it on others.'
             : 'Chrome ignores alpha(opacity), so the element stays fully opaque. Because the value is syntactically valid CSS, nothing warns about it.',
           recommendation:
             opacity !== null
               ? 'Migrate this finding to replace the declaration with opacity. opacity creates a stacking context, so verify layered and nested content after the change.'
-              : isGradient
-                ? 'Replace with a standard linear-gradient()/radial-gradient() background, then verify the fallback for older Chrome versions is acceptable.'
-                : 'Replace with opacity or rgba() on the same rule. Note the semantic difference: IE alpha applied per element without affecting children the same way, so check nested content after the change.',
+              : gradient !== null
+                ? 'Migrate this finding to replace the filter with background-image: linear-gradient(...). Verify the existing background fallback and any layered content; 8-digit ARGB colors and extra stops stay manual.'
+                : isGradient
+                  ? 'Replace with a standard linear-gradient()/radial-gradient() background, then verify the fallback for older Chrome versions is acceptable.'
+                  : 'Replace with opacity or rgba() on the same rule. Note the semantic difference: IE alpha applied per element without affecting children the same way, so check nested content after the change.',
           evidence: {
             kind: 'CssDeclaration',
             matched: hit.declaration.raw.slice(0, 160),
@@ -211,6 +214,13 @@ define({
               value: value.slice(0, 200),
               selector: hit.declaration.selector ?? '(none)',
               ...(opacity !== null ? { opacityValue: opacity } : {}),
+              ...(gradient !== null
+                ? {
+                    gradientDirection: gradient.direction,
+                    startColor: gradient.startColor,
+                    endColor: gradient.endColor,
+                  }
+                : {}),
             },
           },
         }),

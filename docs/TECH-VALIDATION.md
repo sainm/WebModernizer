@@ -1814,3 +1814,39 @@ migration items with diffs to `opacity: 0.9` and `opacity: 0.85 !important`, whi
 remains a manual finding and is not touched by the applied plan.
 
 Suite: 276 tests.
+
+## 46. Forty-second increment — simple IE gradients become linear-gradient
+
+The gradient half of `WL-CSS-003` stayed manual: `progid:DXImageTransform.Microsoft.gradient(...)`
+was reported, but dropping an arbitrary filter could remove shadows or combined effects. A single
+two-color gradient is mechanically mappable, and the fixture's `.app-header` is exactly that shape.
+
+**Only the strict two-color form parses.** `ieGradientValue` requires a single
+`gradient(startColorstr=..., endColorstr=...)` call, optionally with `gradientType=0|1`, both colors
+as 3/6-digit hex, no unknown arguments, and no quotes beyond the outer `-ms-filter` pair. 8-digit
+ARGB colors, extra stops, missing colors, shadows and mixed filter lists return null and stay
+MANUAL. `WL-CSS-003` (1.2.0) promotes only parsed gradients and records direction and colors in
+evidence.
+
+**One filter recipe, two branches.** The recipe registry maps one recipe per rule, so the alpha and
+gradient conversions live in `RCP-IE-FILTER`: alpha values become `opacity: N/100`, gradients become
+`background-image: linear-gradient(to bottom|to right, start, end)`, and both preserve `!important`
+and the trailing semicolon. Gradient preconditions additionally refuse an existing
+`background-image` in the same rule and a `background` shorthand declared after the filter; `opacity`
+preconditions refuse a second `opacity`. A `background` shorthand before the filter is kept as the
+fallback color.
+
+**Tests and mutations.** Three gradient cases: level mapping across alpha, MS Alpha, two valid
+gradients, an 8-digit ARGB color, a mixed filter and a missing end color; a full migration that
+converts three declarations while preserving fallback, direction and `!important`; and the two
+cascade conflicts (existing `background-image`, later `background` shorthand) being blocked.
+Disabling the gradient parser, the direction mapping, the ARGB color guard, or either cascade guard
+each turned a test red. The fixture moves from 31 to 32 auto-convertible (10 SAFE, 22 CONDITIONAL)
+and from 55 to 54 manual (recipe-blocked 7 -> 6); the catalog stays at 62 rules / 17 recipes and the
+suite is 279 tests.
+
+**UI.** A demo rule with `background: #003366` and a two-color gradient filter previews as
+`background-image: linear-gradient(to bottom, #003366, #005599)` while the fallback color is kept;
+gradients with unsupported colors stay manual.
+
+Suite: 279 tests.

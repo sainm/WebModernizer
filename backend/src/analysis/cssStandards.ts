@@ -61,3 +61,36 @@ export function alphaOpacityValue(value: string): number | null {
   if (!Number.isFinite(opacity) || opacity < 0 || opacity > 100) return null;
   return opacity;
 }
+
+export interface IeGradient {
+  direction: 'to bottom' | 'to right';
+  startColor: string;
+  endColor: string;
+}
+
+export function ieGradientValue(value: string): IeGradient | null {
+  const trimmed = value.trim().replace(/^["']|["']$/g, '').trim();
+  const match = /^progid:DXImageTransform\.Microsoft\.gradient\s*\(([^)]*)\)$/i.exec(trimmed);
+  if (!match) return null;
+  const args = new Map<string, string>();
+  for (const part of match[1].split(',')) {
+    const pair = /^\s*([a-zA-Z]+)\s*=\s*(?:'([^']*)'|"([^"]*)"|([^,\s]+))\s*$/.exec(part);
+    if (!pair) return null;
+    const key = pair[1].toLowerCase();
+    const raw = pair[2] ?? pair[3] ?? pair[4] ?? '';
+    if (args.has(key)) return null;
+    args.set(key, raw);
+  }
+  const startColor = args.get('startcolorstr');
+  const endColor = args.get('endcolorstr');
+  if (!startColor || !endColor) return null;
+  if (!/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(startColor) || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(endColor)) {
+    return null;
+  }
+  const type = args.get('gradienttype') ?? '0';
+  if (type !== '0' && type !== '1') return null;
+  for (const key of args.keys()) {
+    if (key !== 'startcolorstr' && key !== 'endcolorstr' && key !== 'gradienttype') return null;
+  }
+  return { direction: type === '1' ? 'to right' : 'to bottom', startColor, endColor };
+}

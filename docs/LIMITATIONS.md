@@ -83,12 +83,13 @@ scan (the dialog offers a rescan button).
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
 hack removal, renaming a `-ms-` property whose value syntax matches the standard one, the
-function-level and inline handler rewrites, `event.button` comparisons, and alpha-only filter
-opacity. Everything else is reported as MANUAL or UNSUPPORTED, but MANUAL is not one thing:
+function-level and inline handler rewrites, `event.button` comparisons, and IE filter conversion
+(alpha-only opacity and simple two-color gradients). Everything else is reported as MANUAL or
+UNSUPPORTED, but MANUAL is not one thing:
 
 | Situation | Fixture count | What it really means |
 | --- | --- | --- |
-| Recipe exists, this occurrence fails its preconditions | 7 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
+| Recipe exists, this occurrence fails its preconditions | 6 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
 | Mechanical rewrite exists, recipe not implemented yet | 4 | Labelled "automatable later" in the UI with the reason. Remaining: `createEventObject`, `document.selection.createRange()`, and the `-ms-` properties whose value syntax differs (`-ms-flex`, `-ms-writing-mode`). |
 | Needs human judgement or a product decision | 44 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
 
@@ -149,11 +150,14 @@ left/right/middle and allowed combined values; Chrome uses 0/1/2 and exposes hel
 and combined-button logic remain manual. On `mousemove`, IE's "no button" 0 collides with Chrome's
 left-button 0, so the recipe asks for the handler's event type to be verified.
 
-**Alpha-only filter conversion stops at opacity.** The recipe replaces a declaration whose value is
-exactly `alpha(opacity=N)` or the MS `Alpha(Opacity=N)` progid with `opacity: N/100`, preserving
-`!important`. Gradients, shadows and combined filter lists stay manual because dropping them would
-remove effects. `opacity` creates a stacking context and fades descendants, so layered content must
-be checked, and the recipe refuses when the same rule already declares `opacity`.
+**IE filter conversion stops at single-effect values.** `RCP-IE-FILTER` replaces a declaration whose
+value is exactly `alpha(opacity=N)` or the MS `Alpha(Opacity=N)` progid with `opacity: N/100`, and a
+single two-color `gradient(...)` with `background-image: linear-gradient(...)`, preserving
+`!important`. It maps `gradientType` 0/1 to `to bottom`/`to right` and only accepts 3/6-digit hex
+colors; 8-digit ARGB colors, extra stops, shadows and combined filter lists stay manual. The recipe
+refuses a second `opacity`, any existing `background-image`, or a `background` shorthand declared
+after the filter. `opacity` creates a stacking context, and IE painted gradients over the existing
+background, so layered content and the fallback color must be checked.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,

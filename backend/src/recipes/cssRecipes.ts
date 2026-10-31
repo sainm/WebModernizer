@@ -1,7 +1,7 @@
 import type { AnalysisFinding, TextEdit } from '../model/types.js';
 import type { ParsedFile } from '../parser/index.js';
 import type { CssDeclaration } from '../parser/cssParser.js';
-import { alphaOpacityValue, standardForMs } from '../analysis/cssStandards.js';
+import { alphaOpacityValue, ieGradientValue, standardForMs } from '../analysis/cssStandards.js';
 import type { PreconditionResult, Recipe, RecipeContext } from './types.js';
 
 interface DeclarationHit {
@@ -150,17 +150,18 @@ function opacityText(value: number): string {
   return fixed === '' ? '0' : fixed;
 }
 
-const filterOpacity: Recipe = {
-  id: 'RCP-FILTER-OPACITY',
-  name: 'IE alpha(opacity) -> opacity',
+const ieFilter: Recipe = {
+  id: 'RCP-IE-FILTER',
+  name: 'IE filter -> opacity or linear-gradient',
   version: '1.0.0',
   ruleIds: ['WL-CSS-003'],
   level: 'CONDITIONAL',
-  summary: 'Replaces an alpha-only IE filter declaration with the equivalent opacity declaration.',
+  summary:
+    'Replaces an alpha-only filter with opacity, or a simple two-color gradient filter with background-image: linear-gradient(...).',
   caveats: [
-    'Only a value that is exactly alpha(opacity=N) or the MS Alpha progid is converted; gradients, shadows and combined filters stay manual.',
+    'Only alpha(opacity=N), the MS Alpha progid, or a single gradient with two 3/6-digit hex colors and gradientType 0 or 1 is converted; shadows, combined filters, 8-digit ARGB colors and extra stops stay manual.',
     'opacity creates a stacking context and fades descendants; verify layered and nested content after the change.',
-    'If the same rule already declares opacity, or the filter is inside an inline style attribute, the recipe refuses.',
+    'The recipe refuses when the same rule already declares opacity, background-image, or a background shorthand after the filter.',
   ],
   preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
     const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
@@ -174,31 +175,65 @@ const filterOpacity: Recipe = {
     if (!hit.decl.raw.toLowerCase().startsWith(prop)) {
       return { ok: false, reasons: ['The declaration text does not start with the property name; refusing to guess an edit range.'] };
     }
-    if (alphaOpacityValue(hit.decl.value) === null) {
-      return { ok: false, reasons: ['The filter value is not alpha-only, so replacing it with opacity would drop other effects.'] };
+    const opacity = alphaOpacityValue(hit.decl.value);
+    const gradient = opacity === null ? ieGradientValue(hit.decl.value) : null;
+    if (opacity === null && gradient === null) {
+      return { ok: false, reasons: ['The filter value is not a simple alpha-only or two-color gradient form that can be mapped mechanically.'] };
     }
-    const duplicate = ctx.parsed.cssUnits
-      .flatMap((unit) => unit.result.declarations)
-      .some((decl) => decl.prop.toLowerCase() === 'opacity' && decl.selector === hit.decl.selector);
-    if (duplicate) {
-      return { ok: false, reasons: ['The same rule already declares opacity; adding another would make the result order-dependent.'] };
+    const declarations = ctx.parsed.cssUnits.flatMap((unit) => unit.result.declarations);
+    if (opacity !== null) {
+      const duplicate = declarations.some(
+        (decl) => decl.prop.toLowerCase() === 'opacity' && decl.selector === hit.decl.selector,
+      );
+      if (duplicate) {
+        return { ok: false, reasons: ['The same rule already declares opacity; adding another would make the result order-dependent.'] };
+      }
+      return { ok: true, reasons: ['Verify stacking context and nested content after removing the filter.'] };
     }
-    return { ok: true, reasons: ['Verify stacking context and nested content after removing the filter.'] };
+    const siblings = declarations.filter(
+      (decl) =>
+        decl.selector === hit.decl.selector &&
+        JSON.stringify(decl.atRuleChain) === JSON.stringify(hit.decl.atRuleChain),
+    );
+    if (siblings.some((decl) => decl.prop.toLowerCase() === 'background-image')) {
+      return { ok: false, reasons: ['The same rule already declares background-image; adding a gradient would duplicate or override it.'] };
+    }
+    if (
+      siblings.some(
+        (decl) => decl.prop.toLowerCase() === 'background' && decl.startOffset > hit.decl.startOffset,
+      )
+    ) {
+      return { ok: false, reasons: ['A background shorthand is declared after the filter and would override the new gradient.'] };
+    }
+    return { ok: true, reasons: ['Verify the existing background fallback and layered content.'] };
   },
   plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
     const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
     if (!hit) return null;
     const opacity = alphaOpacityValue(hit.decl.value);
-    if (opacity === null) return null;
+    const gradient = opacity === null ? ieGradientValue(hit.decl.value) : null;
+    if (opacity === null && gradient === null) return null;
     const important = hit.decl.important ? ' !important' : '';
     const semicolon = /;\s*$/.test(hit.decl.raw) ? ';' : '';
+    if (opacity !== null) {
+      return [
+        {
+          start: hit.decl.startOffset,
+          end: hit.decl.endOffset,
+          newText: `opacity: ${opacityText(opacity)}${important}${semicolon}`,
+          ruleId: 'WL-CSS-003',
+          reason: 'Chrome ignores the IE alpha filter; opacity is the standard equivalent for a single opacity value.',
+        },
+      ];
+    }
+    if (gradient === null) return null;
     return [
       {
         start: hit.decl.startOffset,
         end: hit.decl.endOffset,
-        newText: `opacity: ${opacityText(opacity)}${important}${semicolon}`,
+        newText: `background-image: linear-gradient(${gradient.direction}, ${gradient.startColor}, ${gradient.endColor})${important}${semicolon}`,
         ruleId: 'WL-CSS-003',
-        reason: 'Chrome ignores the IE alpha filter; opacity is the standard equivalent for a single opacity value.',
+        reason: 'The IE gradient filter is ignored by Chrome; linear-gradient() is the standard equivalent for two colors.',
       },
     ];
   },
@@ -208,4 +243,4 @@ function lineStartOf(text: string, offset: number): number {
   return text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
 }
 
-export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard, filterOpacity];
+export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard, ieFilter];

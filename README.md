@@ -42,8 +42,8 @@ node backend/dist/cli/scan.js --project examples/legacy-app --name "Legacy Order
 npm run stress
 ```
 
-Expected on the fixture: **12 files, 96 findings, 41 high risk, 31 auto-convertible (10 safe, 21 conditional),
-4 automatable-but-not-yet-implemented, 7 recipe-blocked, 44 needing judgement, 10 unsupported**.
+Expected on the fixture: **12 files, 96 findings, 41 high risk, 32 auto-convertible (10 safe, 22 conditional),
+4 automatable-but-not-yet-implemented, 6 recipe-blocked, 44 needing judgement, 10 unsupported**.
 
 ### Optional: visual regression
 
@@ -62,7 +62,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 276 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 279 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
@@ -72,7 +72,8 @@ npm test        # 276 tests: parser, rules, per-rule coverage, rule metadata, me
                 #            cross-file inline calls, handlers with existing parameters,
                 #            inline attribute window.event, nested handler helpers,
                 #            reusing an existing event parameter, event.button numbering,
-                #            srcUrn / recordset / setExpression detection, filter opacity
+                #            srcUrn / recordset / setExpression detection, filter opacity,
+                #            gradient filter conversion
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -103,6 +104,7 @@ like an IE API call inside a comment or a string literal must not be reported.
 | Inline handler attributes: replace window.event with the event argument the attribute already receives, then unlock the property recipes | done |
 | IE event.button numbering: left/middle literal comparisons are rewritten to Chrome 0/1; reads and bitmask tests stay manual | done |
 | Alpha-only IE filter conversion: `alpha(opacity=N)` / MS Alpha progid becomes `opacity: N/100` | done |
+| Simple IE gradient filter conversion: two-color `gradient(...)` becomes `background-image: linear-gradient(...)` | done |
 | Detection for event.srcUrn, event.recordset and style.setExpression/removeExpression | done |
 | Static validation after migration | done |
 | Encoding-faithful write-back for non-UTF-8 sources (Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16, UTF-8 BOM) | done |
@@ -259,7 +261,7 @@ detected and that findings inside it land on the correct line.
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 276 tests |
+| 15 | Automated tests for core behaviour | 279 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

@@ -1,7 +1,7 @@
 import type { AnalysisFinding, TextEdit } from '../model/types.js';
 import type { ParsedFile } from '../parser/index.js';
 import type { CssDeclaration } from '../parser/cssParser.js';
-import { standardForMs } from '../analysis/cssStandards.js';
+import { alphaOpacityValue, standardForMs } from '../analysis/cssStandards.js';
 import type { PreconditionResult, Recipe, RecipeContext } from './types.js';
 
 interface DeclarationHit {
@@ -145,8 +145,67 @@ const renameToStandard: Recipe = {
   },
 };
 
+function opacityText(value: number): string {
+  const fixed = (value / 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return fixed === '' ? '0' : fixed;
+}
+
+const filterOpacity: Recipe = {
+  id: 'RCP-FILTER-OPACITY',
+  name: 'IE alpha(opacity) -> opacity',
+  version: '1.0.0',
+  ruleIds: ['WL-CSS-003'],
+  level: 'CONDITIONAL',
+  summary: 'Replaces an alpha-only IE filter declaration with the equivalent opacity declaration.',
+  caveats: [
+    'Only a value that is exactly alpha(opacity=N) or the MS Alpha progid is converted; gradients, shadows and combined filters stay manual.',
+    'opacity creates a stacking context and fades descendants; verify layered and nested content after the change.',
+    'If the same rule already declares opacity, or the filter is inside an inline style attribute, the recipe refuses.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) {
+      return { ok: false, reasons: ['The declaration is no longer at this position, or it comes from an inline style attribute.'] };
+    }
+    const prop = hit.decl.prop.toLowerCase();
+    if (prop !== 'filter' && prop !== '-ms-filter') {
+      return { ok: false, reasons: ['The declaration is no longer an IE filter property.'] };
+    }
+    if (!hit.decl.raw.toLowerCase().startsWith(prop)) {
+      return { ok: false, reasons: ['The declaration text does not start with the property name; refusing to guess an edit range.'] };
+    }
+    if (alphaOpacityValue(hit.decl.value) === null) {
+      return { ok: false, reasons: ['The filter value is not alpha-only, so replacing it with opacity would drop other effects.'] };
+    }
+    const duplicate = ctx.parsed.cssUnits
+      .flatMap((unit) => unit.result.declarations)
+      .some((decl) => decl.prop.toLowerCase() === 'opacity' && decl.selector === hit.decl.selector);
+    if (duplicate) {
+      return { ok: false, reasons: ['The same rule already declares opacity; adding another would make the result order-dependent.'] };
+    }
+    return { ok: true, reasons: ['Verify stacking context and nested content after removing the filter.'] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) return null;
+    const opacity = alphaOpacityValue(hit.decl.value);
+    if (opacity === null) return null;
+    const important = hit.decl.important ? ' !important' : '';
+    const semicolon = /;\s*$/.test(hit.decl.raw) ? ';' : '';
+    return [
+      {
+        start: hit.decl.startOffset,
+        end: hit.decl.endOffset,
+        newText: `opacity: ${opacityText(opacity)}${important}${semicolon}`,
+        ruleId: 'WL-CSS-003',
+        reason: 'Chrome ignores the IE alpha filter; opacity is the standard equivalent for a single opacity value.',
+      },
+    ];
+  },
+};
+
 function lineStartOf(text: string, offset: number): number {
   return text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
 }
 
-export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard];
+export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard, filterOpacity];

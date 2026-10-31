@@ -44,6 +44,9 @@ All notable changes to WebLift are recorded here. The format follows
   recordset is unsupported.
 - Strict FIFO project-lock queue: waiters take per-project tickets, only the lowest live ticket
   acquires, and timeout, cancellation or a dead process removes its ticket.
+- Alpha-only IE filter conversion (`RCP-FILTER-OPACITY`): `alpha(opacity=N)` and the MS Alpha
+  progid become `opacity: N/100`, preserving `!important`; gradients, shadows and combined filters
+  stay manual.
 - Inline handler attributes that read `window.event` (`WL-JS-018` / `RCP-INLINE-HANDLER-EVENT`):
   the attribute already receives `event`, so every reference is replaced in place, and after a
   rescan the `srcElement`/`returnValue`/`cancelBubble` recipes apply to the inline event.
@@ -52,11 +55,11 @@ All notable changes to WebLift are recorded here. The format follows
 
 ### Changed
 
-- The rule and recipe catalog is now 62 rules and 16 recipes; the fixture remains at 12 files,
-  96 findings, 41 high risk, 29 auto-convertible (10 SAFE, 19 CONDITIONAL), 57 manual and 10
+- The rule and recipe catalog is now 62 rules and 17 recipes; the fixture is 12 files,
+  96 findings, 41 high risk, 31 auto-convertible (10 SAFE, 21 CONDITIONAL), 55 manual and 10
   unsupported.
-- The automated suite is now 273 tests, including mutation-checked guards for the new handler,
-  inline-attribute and locking paths.
+- The automated suite is now 276 tests, including mutation-checked guards for the new handler,
+  inline-attribute, CSS and locking paths.
 
 ### Fixed
 

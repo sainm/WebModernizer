@@ -79,16 +79,16 @@ would swallow 20 findings is visible as such. That count is computed against the
 scan; creating the rule does not retro-apply it, so the visible result still arrives on the next
 scan (the dialog offers a rescan button).
 
-**Fourteen recipes, and "manual" covers three different situations.** Shipped recipes:
+**Seventeen recipes, and "manual" covers three different situations.** Shipped recipes:
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
-hack removal, renaming a `-ms-` property whose value syntax matches the standard one, and the
-function-level handler-signature rewrite. Everything else is reported as MANUAL or UNSUPPORTED,
-but MANUAL is not one thing:
+hack removal, renaming a `-ms-` property whose value syntax matches the standard one, the
+function-level and inline handler rewrites, `event.button` comparisons, and alpha-only filter
+opacity. Everything else is reported as MANUAL or UNSUPPORTED, but MANUAL is not one thing:
 
 | Situation | Fixture count | What it really means |
 | --- | --- | --- |
-| Recipe exists, this occurrence fails its preconditions | 9 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
+| Recipe exists, this occurrence fails its preconditions | 7 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
 | Mechanical rewrite exists, recipe not implemented yet | 4 | Labelled "automatable later" in the UI with the reason. Remaining: `createEventObject`, `document.selection.createRange()`, and the `-ms-` properties whose value syntax differs (`-ms-flex`, `-ms-writing-mode`). |
 | Needs human judgement or a product decision | 44 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
 
@@ -148,6 +148,12 @@ left/right/middle and allowed combined values; Chrome uses 0/1/2 and exposes hel
 4 (middle, becomes 1). Bitmask tests (`&`), values stored in variables, comparisons against 0/2/3
 and combined-button logic remain manual. On `mousemove`, IE's "no button" 0 collides with Chrome's
 left-button 0, so the recipe asks for the handler's event type to be verified.
+
+**Alpha-only filter conversion stops at opacity.** The recipe replaces a declaration whose value is
+exactly `alpha(opacity=N)` or the MS `Alpha(Opacity=N)` progid with `opacity: N/100`, preserving
+`!important`. Gradients, shadows and combined filter lists stay manual because dropping them would
+remove effects. `opacity` creates a stacking context and fades descendants, so layered content must
+be checked, and the recipe refuses when the same rule already declares `opacity`.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,

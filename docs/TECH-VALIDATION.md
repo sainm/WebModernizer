@@ -1782,3 +1782,35 @@ lock is momentarily free, the text now says it is queued behind that operation i
 an owner is running.
 
 Suite: 273 tests.
+
+## 45. Forty-first increment — alpha-only filters become opacity
+
+`filter: alpha(opacity=90)` and its `-ms-filter` progid twin are the most common IE CSS leftovers,
+and they are mechanically equivalent to `opacity`. The rule already reported them, but every
+occurrence stayed MANUAL because dropping an arbitrary filter could remove gradients or shadows.
+
+**The value must be alpha-only.** `alphaOpacityValue` accepts exactly `alpha(opacity=N)` or
+`progid:DXImageTransform.Microsoft.Alpha(Opacity=N)` (quotes stripped) with N between 0 and 100.
+`WL-CSS-003` promotes an opacity finding to CONDITIONAL only when that parser succeeds and records
+the numeric value in evidence; filtered values that combine alpha with a gradient, shadow or other
+effect remain MANUAL, as do gradients themselves.
+
+**The recipe replaces the declaration, not just the token.** `RCP-FILTER-OPACITY` re-reads the
+declaration, verifies the property is `filter`/`-ms-filter` and the value is still alpha-only,
+refuses when the same rule already declares `opacity`, and replaces the declaration with
+`opacity: N/100`. It preserves `!important` and the trailing semicolon. The caveats name the real
+semantic gap: `opacity` creates a stacking context and fades descendants, so layered and nested
+content needs a visual check.
+
+**Tests and mutations.** Three cases: level mapping across alpha, MS Alpha, opacity 100, mixed
+alpha+gradient and shadow; a full migration of three declarations that leaves the gradient and
+shadow untouched; and the duplicate-opacity refusal. Disabling the alpha-only gate, the duplicate
+guard, `!important` preservation, or the semicolon preservation each turned a test red. The fixture
+moves from 29 to 31 auto-convertible (10 SAFE, 21 CONDITIONAL) and from 57 to 55 manual
+(recipe-blocked 9 -> 7); the catalog is 62 rules / 17 recipes, and the suite is 276 tests.
+
+**UI.** A demo stylesheet with two alpha filters and one gradient: both alpha declarations appear as
+migration items with diffs to `opacity: 0.9` and `opacity: 0.85 !important`, while the gradient
+remains a manual finding and is not touched by the applied plan.
+
+Suite: 276 tests.

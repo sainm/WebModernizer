@@ -1,5 +1,5 @@
 import { rawAttributeValue } from '../../parser/htmlParser.js';
-import { standardForMs } from '../cssStandards.js';
+import { alphaOpacityValue, standardForMs } from '../cssStandards.js';
 import type { CssDeclaration } from '../../parser/cssParser.js';
 import type { FileContext, RawFinding, Rule, RuleDraft } from '../types.js';
 import { makeFinding } from '../finding.js';
@@ -164,13 +164,14 @@ define({
   meta: {
     id: 'WL-CSS-003',
     name: 'IE filter (progid / alpha)',
-    version: '1.0.0',
+    version: '1.1.0',
     description: 'IE proprietary filter values: progid:DXImageTransform gradients and alpha(opacity) transparency.',
     language: 'css',
     category: 'CSS_COMPAT',
     defaultSeverity: 'MEDIUM',
     defaultMigrationLevel: 'MANUAL',
-    basis: 'Property -ms-filter, or property filter whose value contains progid: or alpha(opacity.',
+    basis: 'Property -ms-filter, or property filter whose value contains progid: or alpha(opacity. An alpha-only value is automatable.',
+    recipeId: 'RCP-FILTER-OPACITY',
     tags: ['ie-only', 'filter'],
   },
   detect(ctx) {
@@ -183,19 +184,24 @@ define({
       if (!isIeFilter) return;
       const isOpacity = /alpha\s*\(\s*opacity/i.test(value);
       const isGradient = /gradient/i.test(value);
+      const opacity = isOpacity ? alphaOpacityValue(value) : null;
       out.push(
         makeFinding(asRule(this), ctx, {
           startOffset: hit.offset,
           endOffset: hit.offset + hit.declaration.raw.length,
-          severity: isOpacity ? 'MEDIUM' : 'MEDIUM',
+          severity: 'MEDIUM',
           message: isOpacity ? 'Uses IE alpha(opacity) for transparency' : 'Uses IE filter progid:DXImageTransform',
           variant: isOpacity ? 'opacity' : 'gradient',
+          migrationLevel: opacity !== null ? 'CONDITIONAL' : 'MANUAL',
           risk: isGradient
             ? 'Chrome ignores the IE gradient filter, so the element renders without any background gradient. Fallback colors may still apply, which hides the problem on some pages and exposes it on others.'
             : 'Chrome ignores alpha(opacity), so the element stays fully opaque. Because the value is syntactically valid CSS, nothing warns about it.',
-          recommendation: isGradient
-            ? 'Replace with a standard linear-gradient()/radial-gradient() background, then verify the fallback for older Chrome versions is acceptable.'
-            : 'Replace with opacity or rgba() on the same rule. Note the semantic difference: IE alpha applied per element without affecting children the same way, so check nested content after the change.',
+          recommendation:
+            opacity !== null
+              ? 'Migrate this finding to replace the declaration with opacity. opacity creates a stacking context, so verify layered and nested content after the change.'
+              : isGradient
+                ? 'Replace with a standard linear-gradient()/radial-gradient() background, then verify the fallback for older Chrome versions is acceptable.'
+                : 'Replace with opacity or rgba() on the same rule. Note the semantic difference: IE alpha applied per element without affecting children the same way, so check nested content after the change.',
           evidence: {
             kind: 'CssDeclaration',
             matched: hit.declaration.raw.slice(0, 160),
@@ -204,6 +210,7 @@ define({
               property: hit.declaration.prop,
               value: value.slice(0, 200),
               selector: hit.declaration.selector ?? '(none)',
+              ...(opacity !== null ? { opacityValue: opacity } : {}),
             },
           },
         }),

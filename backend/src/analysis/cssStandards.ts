@@ -50,3 +50,14 @@ export function standardForMs(property: string): string | null {
 export function similarStandardForMs(property: string): string | null {
   return DIFFERENT_SYNTAX[property.toLowerCase()] ?? null;
 }
+
+export function alphaOpacityValue(value: string): number | null {
+  const trimmed = value.trim().replace(/^["']|["']$/g, '').trim();
+  const match =
+    /^alpha\s*\(\s*opacity\s*=\s*(\d+(?:\.\d+)?)\s*\)$/i.exec(trimmed) ??
+    /^progid:DXImageTransform\.Microsoft\.Alpha\s*\(\s*opacity\s*=\s*(\d+(?:\.\d+)?)\s*\)$/i.exec(trimmed);
+  if (!match) return null;
+  const opacity = Number(match[1]);
+  if (!Number.isFinite(opacity) || opacity < 0 || opacity > 100) return null;
+  return opacity;
+}

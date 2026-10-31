@@ -1,7 +1,7 @@
 # Rule catalog
 
 Generated from the rule registry. The ruleDoc test fails if this file drifts from the source registry.
-Total: **62 rules**, **16 recipes**.
+Total: **62 rules**, **17 recipes**.
 
 ## Distribution by category
 
@@ -81,7 +81,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-HTML-010 | onpropertychange attribute | html | HTML_COMPAT | MEDIUM | MANUAL | — | event, ie-only-attribute |
 | WL-CSS-001 | CSS expression() | css | CSS_COMPAT | HIGH | MANUAL | — | ie-only, dynamic-css |
 | WL-CSS-002 | CSS behavior property | css | CSS_COMPAT | HIGH | UNSUPPORTED | — | htc, blocker |
-| WL-CSS-003 | IE filter (progid / alpha) | css | CSS_COMPAT | MEDIUM | MANUAL | — | ie-only, filter |
+| WL-CSS-003 | IE filter (progid / alpha) | css | CSS_COMPAT | MEDIUM | MANUAL | RCP-FILTER-OPACITY | ie-only, filter |
 | WL-CSS-004 | Vendor -ms- prefixed property | css | CSS_COMPAT | MEDIUM | CONDITIONAL | RCP-RENAME-MS-PROP | vendor-prefix |
 | WL-CSS-005 | IE CSS hack syntax | css | CSS_COMPAT | MEDIUM | SAFE | RCP-DROP-CSS-HACK | css-hack |
 | WL-CSS-006 | zoom property | css | CSS_COMPAT | LOW | MANUAL | — | layout |
@@ -111,6 +111,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-DROP-UA-COMPATIBLE | Remove X-UA-Compatible document mode | SAFE | WL-HTML-008 | Deletes the IE document-mode <meta> tag, which Chrome ignores. |
 | RCP-DROP-CSS-HACK | Drop IE CSS hack declaration | SAFE | WL-CSS-005 | Deletes the star/underscore declaration or the \9 value hack. |
 | RCP-RENAME-MS-PROP | Rename -ms- property to the standard one | CONDITIONAL | WL-CSS-004 | Renames the prefixed property in place; the value and formatting stay untouched. |
+| RCP-FILTER-OPACITY | IE alpha(opacity) -> opacity | CONDITIONAL | WL-CSS-003 | Replaces an alpha-only IE filter declaration with the equivalent opacity declaration. |
 
 ## Evidence discipline
 

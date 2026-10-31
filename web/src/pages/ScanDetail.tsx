@@ -200,6 +200,11 @@ export default function ScanDetail() {
             <dt>{t('scans.duration')}</dt>
             <dd>{formatDuration(current.startedAt, current.completedAt)}</dd>
           </dl>
+          {current.waitingFor ? (
+            <div className="callout warn" style={{ marginTop: 10 }}>
+              {t('scan.waitingFor', { detail: current.waitingFor })}
+            </div>
+          ) : null}
           {current.errorSummary ? <div className="callout danger" style={{ marginTop: 10 }}>{current.errorSummary}</div> : null}
         </Card>
 

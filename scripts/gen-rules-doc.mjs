@@ -23,7 +23,7 @@ for (const rule of RULES) byCategory[rule.meta.category] = (byCategory[rule.meta
 const lines = [];
 lines.push('# Rule catalog');
 lines.push('');
-lines.push('Generated from the running rule registry, so this file cannot drift from the code.');
+lines.push('Generated from the rule registry. The ruleDoc test fails if this file drifts from the source registry.');
 lines.push(`Total: **${RULES.length} rules**, **${RECIPES.length} recipes**.`);
 lines.push('');
 lines.push('## Distribution by category');

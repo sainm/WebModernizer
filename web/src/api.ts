@@ -8,6 +8,7 @@ export type FindingStatus =
   | 'READY_FOR_MIGRATION'
   | 'MIGRATED'
   | 'REVIEW_REQUIRED'
+  | 'FIXED_IN_CODE'
   | 'VALIDATED'
   | 'VALIDATION_FAILED'
   | 'IGNORED';
@@ -66,6 +67,7 @@ export interface ScanTask {
   resolvedCount: number;
   addedCount: number;
   currentFile: string | null;
+  waitingFor: string | null;
   errorSummary: string | null;
   configSnapshot: ProjectConfig;
   ruleSignature: string | null;
@@ -191,6 +193,7 @@ export interface PlanItem {
   ruleId: string;
   recipeId: string;
   filePath: string;
+  encoding: string;
   migrationLevel: MigrationLevel;
   applicable: boolean;
   blockedReasons: string[];

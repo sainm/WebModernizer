@@ -110,6 +110,7 @@ const STATUS_CLASS: Record<FindingStatus, string> = {
   READY_FOR_MIGRATION: 'accent',
   MIGRATED: 'ok',
   REVIEW_REQUIRED: 'warn',
+  FIXED_IN_CODE: 'accent',
   VALIDATED: 'ok',
   VALIDATION_FAILED: 'high',
   IGNORED: 'neutral',

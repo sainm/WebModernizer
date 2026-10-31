@@ -3,6 +3,13 @@ import type { FileReference, RelationConfidence } from '../model/types.js';
 import type { ParsedFile } from '../parser/index.js';
 import { rawAttributeValue } from '../parser/htmlParser.js';
 import { walkJs, type JsNode } from '../parser/jsParser.js';
+import {
+  collectHandlerFacts,
+  collectInlineHandlerCalls,
+  type HandlerDefinitionFact,
+  type HandlerRegistrationFact,
+  type InlineHandlerCallFact,
+} from './handlers.js';
 
 export interface ImportHint {
   raw: string;
@@ -22,6 +29,14 @@ export interface FileRefFacts {
   defines: string[];
   /** Function names this file invokes */
   calls: string[];
+  /** Zero-argument functions that read window.event; candidates for a cross-file handler migration. */
+  handlers?: HandlerDefinitionFact[];
+  /** Registrations of named functions as handlers, used to match a definition in another file. */
+  registrations?: HandlerRegistrationFact[];
+  /** Zero-argument calls of a named function from inline on* attributes in this file. */
+  inlineCalls?: InlineHandlerCallFact[];
+  /** Names called somewhere other than a zero-argument inline on* handler; these block handler migration. */
+  directCalls?: string[];
 }
 
 const MAX_RELATIONS = 20000;
@@ -165,6 +180,12 @@ export function extractRefFacts(parsed: ParsedFile): FileRefFacts {
   // Keep only names that are plausible globals; local helpers would create noisy edges.
   facts.defines = [...new Set(facts.defines)];
   facts.calls = [...new Set(facts.calls)];
+  const handlerFacts = collectHandlerFacts({ parsed, text: parsed.file.content });
+  facts.handlers = handlerFacts.handlers;
+  facts.registrations = handlerFacts.registrations;
+  const inlineFacts = collectInlineHandlerCalls({ parsed, text: parsed.file.content });
+  facts.inlineCalls = inlineFacts.calls;
+  facts.directCalls = inlineFacts.directCalls;
   return facts;
 }
 

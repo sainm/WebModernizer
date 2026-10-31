@@ -1,3 +1,9 @@
+import {
+  findHandlerAt,
+  findInlineHandlerCalls,
+  handlerParamEdit,
+  inlineCallEventEdit,
+} from '../analysis/handlers.js';
 import { findEnclosingParam, walkJs, type JsNode } from '../parser/jsParser.js';
 import type { ParsedFile } from '../parser/index.js';
 import type { AnalysisFinding, TextEdit } from '../model/types.js';
@@ -444,6 +450,128 @@ const cssRulesRecipe: Recipe = {
   },
 };
 
+function findHandlerForFinding(
+  finding: AnalysisFinding,
+  ctx: RecipeContext,
+): ReturnType<typeof findHandlerAt> {
+  const start = finding.evidence.detail?.handlerStart;
+  const end = finding.evidence.detail?.handlerEnd;
+  if (typeof start !== 'number' || typeof end !== 'number') return null;
+  return findHandlerAt(ctx, start, end);
+}
+
+const handlerEventParamRecipe: Recipe = {
+  id: 'RCP-HANDLER-EVENT-PARAM',
+  name: 'window.event handler -> event parameter',
+  version: '1.4.0',
+  ruleIds: ['WL-JS-017'],
+  level: 'CONDITIONAL',
+  summary: 'Adds an event parameter to a handler, replaces window.event, and passes event first from inline on* calls while keeping existing parameters and arguments in order.',
+  caveats: [
+    'Inline on* calls are updated to pass event first; existing arguments keep their order. A non-inline call to the same function blocks the finding.',
+    'A handler with existing parameters is only offered when every call site is an inline on* call; a by-reference registration would bind the event to the old first parameter.',
+    'For a cross-file registration, the registration file must stay unchanged and must not call the function directly; the preview verifies its hash.',
+    'The attachEvent/addEventListener registration still needs its own migration.',
+    'Property recipes (srcElement, returnValue, cancelBubble) become applicable only after a rescan.',
+    'window.event inside a nested function is not rewritten; such handlers are not offered by the rule.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const detail = finding.evidence.detail ?? {};
+    if (detail.inlineCallSite === true) {
+      const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+      if (!hit || hit.node.type !== 'CallExpression') {
+        return { ok: false, reasons: ['The inline call no longer exists at this position; re-scan.'] };
+      }
+      const callee = hit.node.callee as JsNode | undefined;
+      const handlerName = typeof detail.handler === 'string' ? detail.handler : '';
+      if (!callee || callee.type !== 'Identifier' || String(callee.name) !== handlerName) {
+        return { ok: false, reasons: ['The call no longer targets the handler recorded in the finding.'] };
+      }
+      if (inlineCallEventEdit(ctx, hit.node) === null) {
+        return { ok: false, reasons: ['The inline call cannot accept an event argument at this position.'] };
+      }
+      return { ok: true, reasons: [] };
+    }
+
+    const handler = findHandlerForFinding(finding, ctx);
+    if (!handler) {
+      return {
+        ok: false,
+        reasons: ['The handler is no longer a function with an editable parameter list and window.event in this file; re-scan.'],
+      };
+    }
+    if (handlerParamEdit(ctx, handler.node) === null) {
+      return { ok: false, reasons: ['The handler parameter list cannot accept a leading event parameter.'] };
+    }
+    const inlineCount = detail.inlineCallCount;
+    const handlerName = detail.handler;
+    if (detail.inlineInDefinitionFile === true && typeof inlineCount === 'number' && inlineCount > 0) {
+      if (typeof handlerName !== 'string') return { ok: false, reasons: ['The handler identity is missing from the finding.'] };
+      if (findInlineHandlerCalls(ctx, handlerName).length === 0) {
+        return { ok: false, reasons: ['The inline handler call no longer exists at this position; re-scan.'] };
+      }
+    }
+    return { ok: true, reasons: [] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const detail = finding.evidence.detail ?? {};
+    if (detail.inlineCallSite === true) {
+      const hit = findNodeByRange(ctx.parsed, finding.startOffset, finding.endOffset);
+      if (!hit) return null;
+      const edit = inlineCallEventEdit(ctx, hit.node);
+      if (edit === null) return null;
+      return [
+        {
+          start: edit.offset,
+          end: edit.offset,
+          newText: edit.text,
+          ruleId: 'WL-JS-017',
+          reason: 'Inline on* handlers have the event object in scope; pass it to the rewritten handler signature.',
+        },
+      ];
+    }
+
+    const handler = findHandlerForFinding(finding, ctx);
+    if (!handler) return null;
+    const paramEdit = handlerParamEdit(ctx, handler.node);
+    if (paramEdit === null) return null;
+    const edits: TextEdit[] = [
+      {
+        start: paramEdit.offset,
+        end: paramEdit.offset,
+        newText: paramEdit.text,
+        ruleId: 'WL-JS-017',
+        reason: 'Standard event handlers receive the event object as their first argument.',
+      },
+    ];
+    for (const node of handler.windowEventNodes) {
+      if (typeof node.start !== 'number' || typeof node.end !== 'number') return null;
+      edits.push({
+        start: node.start,
+        end: node.end,
+        newText: 'event',
+        ruleId: 'WL-JS-017',
+        reason: 'window.event is the IE global; the handler parameter is the standard event object.',
+      });
+    }
+    const handlerName = detail.handler;
+    if (detail.inlineInDefinitionFile === true && typeof handlerName === 'string') {
+      for (const inlineCall of findInlineHandlerCalls(ctx, handlerName)) {
+        const edit = inlineCallEventEdit(ctx, inlineCall.node);
+        if (edit === null) return null;
+        edits.push({
+          start: edit.offset,
+          end: edit.offset,
+          newText: edit.text,
+          ruleId: 'WL-JS-017',
+          reason: 'Inline on* handlers have the event object in scope; pass it to the rewritten handler signature.',
+        });
+      }
+    }
+    return edits;
+  },
+};
+
 export const jsRecipes: Recipe[] = [
   srcElementRecipe,
   cancelBubbleRecipe,
@@ -454,4 +582,5 @@ export const jsRecipes: Recipe[] = [
   execScriptRecipe,
   navigateRecipe,
   cssRulesRecipe,
+  handlerEventParamRecipe,
 ];

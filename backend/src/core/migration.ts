@@ -15,8 +15,10 @@ import { recipeForFinding } from '../recipes/registry.js';
 import type { Store } from '../storage/store.js';
 import { applyEdits, diffLines, toUnifiedDiff } from './diff.js';
 import { comparePngs, toDataUrl } from './imageDiff.js';
+import { acquireProjectLock, defaultLockWaitMs, projectBusyReason } from './projectLock.js';
 import { dataRoot } from './report.js';
 import { resolveProjectPath } from './scanner.js';
+import { canEncodeEncoding, detectBom, encodeText, normalizeEncoding } from './textDecode.js';
 
 export interface PreviewOptions {
   scanTaskId: string;
@@ -65,22 +67,33 @@ export interface ExecuteResult {
 interface PreparedFile {
   filePath: string;
   absPath: string;
-  newText: string;
+  newBytes: Buffer;
   beforeHash: string;
   batchId: string;
   backupPath: string;
   items: MigrationPlanItem[];
 }
 
+function registrationFilesOf(finding: AnalysisFinding): string[] {
+  const raw = finding.evidence.detail?.registrationFiles;
+  if (typeof raw === 'string') {
+    return [...new Set(raw.split(',').map((part) => part.trim()).filter(Boolean))];
+  }
+  if (Array.isArray(raw)) {
+    return [...new Set(raw.filter((part): part is string => typeof part === 'string'))];
+  }
+  return [];
+}
+
 let tempCounter = 0;
 
 /** Writes to a temp file in the same directory, then renames, preserving permissions. */
-function writeFileAtomic(absPath: string, content: string): void {
+function writeFileAtomic(absPath: string, content: Buffer): void {
   // pid + counter, not just the clock: two writers inside the same millisecond would otherwise
   // pick the same temp path and rename each other's bytes into place.
   const tempPath = `${absPath}.weblift-tmp-${process.pid}-${(tempCounter += 1)}`;
   const originalMode = statSync(absPath).mode & 0o7777;
-  writeFileSync(tempPath, content, { encoding: 'utf8', mode: originalMode });
+  writeFileSync(tempPath, content, { mode: originalMode });
   renameSync(tempPath, absPath);
   // rename() replaces the inode, so the target now carries the temp file's mode. Writing the
   // content again would not fix that: writeFileSync only applies `mode` when it creates a file.
@@ -97,8 +110,8 @@ interface TargetFile {
   absPath: string;
   text: string;
   hash: string;
-  /** UTF-8 byte-order mark of the original, re-emitted on write so nothing else changes. */
-  bom: string;
+  encoding: string;
+  bomBytes: Buffer;
 }
 
 /**
@@ -110,21 +123,18 @@ function readTarget(rootPath: string, relPath: string, encoding: string | null |
   const absPath = resolveProjectPath(rootPath, relPath);
   if (!absPath || !existsSync(absPath)) return null;
   const buffer = readFileSync(absPath);
-  const hasBom = buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf;
-  const body = hasBom ? buffer.subarray(3) : buffer;
+  const canonical = normalizeEncoding(encoding ?? 'utf-8');
+  const bom = detectBom(buffer);
+  const hasMatchingBom = bom !== null && normalizeEncoding(bom.encoding) === canonical;
+  const bomBytes = hasMatchingBom ? buffer.subarray(0, bom.length) : Buffer.alloc(0);
+  const body = bomBytes.length > 0 ? buffer.subarray(bomBytes.length) : buffer;
   let text: string;
   try {
-    text = new TextDecoder(encoding ?? 'utf-8', { fatal: false }).decode(body);
+    text = new TextDecoder(canonical, { fatal: false }).decode(body);
   } catch {
     text = body.toString('utf8');
   }
-  return { absPath, text, hash: sha256(buffer), bom: hasBom ? '\uFEFF' : '' };
-}
-
-/** True when the bytes on disk can be written back without changing their encoding. */
-function isWritableEncoding(encoding: string | null | undefined): boolean {
-  const normalized = (encoding ?? 'utf-8').toLowerCase().replace(/[_\s]/g, '-');
-  return normalized === 'utf-8' || normalized === 'utf8';
+  return { absPath, text, hash: sha256(buffer), encoding: canonical, bomBytes };
 }
 
 /**
@@ -156,7 +166,14 @@ function planDigest(scanTaskId: string, items: MigrationPlanItem[]): string {
  * rather than the state captured during the scan.
  */
 export class MigrationService {
-  constructor(private readonly store: Store) {}
+  private readonly lockWaitMs: number;
+
+  constructor(
+    private readonly store: Store,
+    options: { lockWaitMs?: number } = {},
+  ) {
+    this.lockWaitMs = options.lockWaitMs ?? defaultLockWaitMs();
+  }
 
   /** Tail of the mutation queue per project. */
   private readonly queues = new Map<string, Promise<void>>();
@@ -189,6 +206,27 @@ export class MigrationService {
     return this.queues.has(projectId);
   }
 
+  private expandFindingIds(scanTaskId: string, findingIds: string[]): string[] {
+    const seen = new Set<string>();
+    const queue = [...findingIds];
+    while (queue.length > 0) {
+      const id = queue.pop() as string;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const finding = this.store.getFinding(id);
+      if (!finding || finding.scanTaskId !== scanTaskId) continue;
+      const rawCompanions = finding.evidence.detail?.companionFindingIds;
+      const companions =
+        typeof rawCompanions === 'string'
+          ? rawCompanions.split(',').map((part) => part.trim()).filter(Boolean)
+          : [];
+      for (const companion of companions) {
+        if (!seen.has(companion)) queue.push(companion);
+      }
+    }
+    return [...seen];
+  }
+
   preview(options: PreviewOptions): MigrationPlan {
     const scan = this.store.getScan(options.scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${options.scanTaskId}`);
@@ -196,7 +234,7 @@ export class MigrationService {
     const items: MigrationPlanItem[] = [];
 
     const findings: AnalysisFinding[] = [];
-    for (const id of options.findingIds) {
+    for (const id of this.expandFindingIds(options.scanTaskId, options.findingIds)) {
       const finding = this.store.getFinding(id);
       if (!finding) {
         warnings.push(`Finding ${id} not found`);
@@ -221,27 +259,27 @@ export class MigrationService {
       const target = readTarget(scan.rootPath, filePath, scannedFile?.encoding);
       if (!target) {
         for (const finding of fileFindings) {
-          items.push(this.blockedItem(finding, 'File no longer exists on disk.', true));
+          items.push(this.blockedItem(finding, 'File no longer exists on disk.', true, scannedFile?.encoding ?? ''));
         }
         continue;
       }
 
-      // A file the tool cannot encode back is not a file it may rewrite. Reading it as UTF-8
-      // would turn every Shift_JIS / EUC-JP character into U+FFFD and writing it back would
-      // persist that loss, so the whole file is refused until the encoding is handled properly.
-      if (!isWritableEncoding(scannedFile?.encoding)) {
+      const hashMatches = scannedFile ? scannedFile.hash === target.hash : false;
+
+      if (!canEncodeEncoding(target.encoding)) {
         for (const finding of fileFindings) {
           items.push(
             this.blockedItem(
               finding,
-              `This file is ${scannedFile?.encoding}, and rewriting it would re-encode the whole file as UTF-8 and destroy every non-ASCII character in it. Convert the file to UTF-8 first, then rescan.`,
+              `This file is ${target.encoding}, and no encoder is available to write it back in that encoding. Convert the file to UTF-8 first, then rescan.`,
+              !hashMatches,
+              target.encoding,
             ),
           );
         }
         continue;
       }
 
-      const hashMatches = scannedFile ? scannedFile.hash === target.hash : false;
       if (!hashMatches) {
         warnings.push(
           `${filePath} changed since the scan; the diff is recomputed against the current content and execution will require a re-scan.`,
@@ -254,12 +292,44 @@ export class MigrationService {
 
       for (const finding of fileFindings) {
         if (finding.status === 'IGNORED') {
-          items.push(this.blockedItem(finding, 'This finding is ignored by a project rule; re-enable it before migrating.'));
+          items.push(
+            this.blockedItem(
+              finding,
+              'This finding is ignored by a project rule; re-enable it before migrating.',
+              false,
+              target.encoding,
+            ),
+          );
           continue;
         }
         const recipe = recipeForFinding(finding);
         if (!recipe) {
-          items.push(this.blockedItem(finding, 'No automated recipe exists for this rule.'));
+          items.push(this.blockedItem(finding, 'No automated recipe exists for this rule.', false, target.encoding));
+          continue;
+        }
+
+        let staleRegistration: string | null = null;
+        for (const registrationFile of registrationFilesOf(finding)) {
+          if (registrationFile === filePath) continue;
+          const scanned = this.store.getScanFile(options.scanTaskId, registrationFile);
+          if (!scanned) {
+            staleRegistration = `Registration file ${registrationFile} is not part of this scan; re-scan before migrating this handler.`;
+            break;
+          }
+          const absPath = resolveProjectPath(scan.rootPath, registrationFile);
+          let currentHash = '';
+          try {
+            currentHash = absPath && existsSync(absPath) ? sha256(readFileSync(absPath)) : '';
+          } catch {
+            currentHash = '';
+          }
+          if (!currentHash || currentHash !== scanned.hash) {
+            staleRegistration = `Registration file ${registrationFile} changed after the scan; re-scan before migrating this handler.`;
+            break;
+          }
+        }
+        if (staleRegistration) {
+          items.push(this.blockedItem(finding, staleRegistration, false, target.encoding));
           continue;
         }
 
@@ -270,6 +340,7 @@ export class MigrationService {
             ruleId: finding.ruleId,
             recipeId: recipe.id,
             filePath,
+            encoding: target.encoding,
             migrationLevel: finding.migrationLevel,
             applicable: false,
             blockedReasons: precondition.reasons,
@@ -287,13 +358,27 @@ export class MigrationService {
 
         const edits = recipe.plan(finding, { text: target.text, parsed });
         if (!edits || edits.length === 0) {
-          items.push(this.blockedItem(finding, 'The recipe could not produce a safe edit for the current code.'));
+          items.push(
+            this.blockedItem(
+              finding,
+              'The recipe could not produce a safe edit for the current code.',
+              false,
+              target.encoding,
+            ),
+          );
           continue;
         }
 
         const overlap = edits.some((edit) => occupied.some((range) => edit.start < range.end && edit.end > range.start));
         if (overlap) {
-          items.push(this.blockedItem(finding, 'This edit overlaps another selected finding in the same file; migrate them separately.'));
+          items.push(
+            this.blockedItem(
+              finding,
+              'This edit overlaps another selected finding in the same file; migrate them separately.',
+              false,
+              target.encoding,
+            ),
+          );
           continue;
         }
         for (const edit of edits) occupied.push({ start: edit.start, end: edit.end });
@@ -302,7 +387,15 @@ export class MigrationService {
         try {
           afterText = applyEdits(target.text, edits);
         } catch (err) {
-          items.push(this.blockedItem(finding, `Edit could not be applied: ${(err as Error).message}`));
+          items.push(
+            this.blockedItem(finding, `Edit could not be applied: ${(err as Error).message}`, false, target.encoding),
+          );
+          continue;
+        }
+
+        const encoded = encodeText(afterText, target.encoding);
+        if (!encoded.ok) {
+          items.push(this.blockedItem(finding, encoded.reason, !hashMatches, target.encoding));
           continue;
         }
 
@@ -321,6 +414,7 @@ export class MigrationService {
           ruleId: finding.ruleId,
           recipeId: recipe.id,
           filePath,
+          encoding: target.encoding,
           migrationLevel: recipe.level,
           applicable: hashMatches,
           blockedReasons: hashMatches
@@ -348,12 +442,18 @@ export class MigrationService {
     };
   }
 
-  private blockedItem(finding: AnalysisFinding, reason: string, staleFile = false): MigrationPlanItem {
+  private blockedItem(
+    finding: AnalysisFinding,
+    reason: string,
+    staleFile = false,
+    encoding = '',
+  ): MigrationPlanItem {
     return {
       findingId: finding.id,
       ruleId: finding.ruleId,
       recipeId: '',
       filePath: finding.filePath,
+      encoding,
       migrationLevel: finding.migrationLevel,
       applicable: false,
       blockedReasons: [reason],
@@ -388,7 +488,28 @@ export class MigrationService {
   async execute(scanTaskId: string, findingIds: string[], options: ExecuteOptions = {}): Promise<ExecuteResult> {
     const scan = this.store.getScan(scanTaskId);
     if (!scan) throw new Error(`Unknown scan ${scanTaskId}`);
-    return this.serialize(scan.projectId, () => this.executeLocked(scan, scanTaskId, findingIds, options));
+    return this.serialize(scan.projectId, async () => {
+      const sessionId = newId('ses');
+      const lockToken = newId('lck');
+      const outcome = await acquireProjectLock(this.store, scan.projectId, process.pid, lockToken, {
+        waitMs: this.lockWaitMs,
+      });
+      if (!outcome.result.ok) {
+        const reason = outcome.timedOut
+          ? `Timed out after ${Math.ceil(outcome.waitedMs / 1000)}s waiting for another operation on this project. ${projectBusyReason(outcome.result)}`
+          : projectBusyReason(outcome.result);
+        return this.abort(sessionId, [{ findingId: '', filePath: '', reason }], [], '');
+      }
+      try {
+        const result = await this.executeLocked(scan, scanTaskId, findingIds, options);
+        if (outcome.waitedMs > 0) {
+          result.warnings.push(`Waited ${Math.ceil(outcome.waitedMs / 1000)}s for another operation on this project to finish.`);
+        }
+        return result;
+      } finally {
+        this.store.releaseProjectLock(scan.projectId, lockToken);
+      }
+    });
   }
 
   private async executeLocked(
@@ -490,11 +611,21 @@ export class MigrationService {
         );
       }
 
+      const encoded = encodeText(afterText, target.encoding);
+      if (!encoded.ok) {
+        return this.abort(
+          sessionId,
+          [{ findingId: items[0].findingId, filePath, reason: encoded.reason }],
+          warnings,
+          plan.planHash,
+        );
+      }
+
       prepared.push({
         filePath,
         absPath: target.absPath,
         // The BOM is not part of the text the recipes reason about, but it is part of the file.
-        newText: target.bom + afterText,
+        newBytes: target.bomBytes.length > 0 ? Buffer.concat([target.bomBytes, encoded.bytes]) : encoded.bytes,
         beforeHash: expectedHash,
         batchId,
         backupPath,
@@ -528,7 +659,7 @@ export class MigrationService {
     const claimedByFile = new Map<string, MigrationExecution[]>();
     try {
       for (const file of prepared) {
-        const afterHash = sha256(file.newText);
+        const afterHash = sha256(file.newBytes);
         const rows: MigrationExecution[] = [];
         for (const item of file.items) {
           const execution: MigrationExecution = {
@@ -571,7 +702,7 @@ export class MigrationService {
     const written: PreparedFile[] = [];
     for (const file of prepared) {
       try {
-        writeFileAtomic(file.absPath, file.newText);
+        writeFileAtomic(file.absPath, file.newBytes);
         written.push(file);
       } catch (err) {
         // Compensate in reverse order: the transaction must leave no half-applied state.
@@ -659,7 +790,7 @@ export class MigrationService {
    * Rolls back everything one execute() call did. Refuses if any file drifted after the
    * migration, because restoring would discard newer edits.
    */
-  rollbackSession(sessionId: string): RollbackResult {
+  async rollbackSession(sessionId: string): Promise<RollbackResult> {
     const rows = this.store.listMigrationsBySession(sessionId);
     if (rows.length === 0) return { ok: false, reason: 'Unknown session' };
     const busy = this.mutationInFlight(rows[0].projectId);
@@ -762,7 +893,7 @@ export class MigrationService {
    * multi-file transaction is restored as a unit. Legacy rows without a session fall
    * back to their batch, then to themselves.
    */
-  rollback(executionId: string): RollbackResult {
+  async rollback(executionId: string): Promise<RollbackResult> {
     const execution = this.store.getMigration(executionId);
     if (!execution) return { ok: false, reason: 'Unknown execution' };
     if (execution.sessionId) return this.rollbackSession(execution.sessionId);
@@ -773,7 +904,7 @@ export class MigrationService {
     return this.rollbackRows([execution], null, 'batch');
   }
 
-  rollbackBatch(batchId: string): RollbackResult {
+  async rollbackBatch(batchId: string): Promise<RollbackResult> {
     const rows = this.store.listMigrationsByBatch(batchId);
     if (rows.length === 0) return { ok: false, reason: 'Unknown batch' };
     const busy = this.mutationInFlight(rows[0].projectId);
@@ -781,7 +912,39 @@ export class MigrationService {
     return this.rollbackRows(rows, batchId, 'batch');
   }
 
-  private rollbackRows(
+  private async rollbackRows(
+    rows: MigrationExecution[],
+    groupId: string | null,
+    scope: 'batch' | 'session',
+  ): Promise<RollbackResult> {
+    if (rows.length === 0) {
+      return { ok: false, reason: 'Unknown batch', affectedFindings: 0, batchId: groupId, sessionId: groupId };
+    }
+    const projectId = rows[0].projectId;
+    const lockToken = newId('lck');
+    const outcome = await acquireProjectLock(this.store, projectId, process.pid, lockToken, {
+      waitMs: this.lockWaitMs,
+    });
+    if (!outcome.result.ok) {
+      const reason = outcome.timedOut
+        ? `Timed out after ${Math.ceil(outcome.waitedMs / 1000)}s waiting for another operation on this project. ${projectBusyReason(outcome.result)}`
+        : projectBusyReason(outcome.result);
+      return {
+        ok: false,
+        reason,
+        affectedFindings: 0,
+        batchId: groupId,
+        sessionId: groupId,
+      };
+    }
+    try {
+      return this.rollbackRowsLocked(rows, groupId, scope);
+    } finally {
+      this.store.releaseProjectLock(projectId, lockToken);
+    }
+  }
+
+  private rollbackRowsLocked(
     rows: MigrationExecution[],
     groupId: string | null,
     scope: 'batch' | 'session',

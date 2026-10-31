@@ -16,10 +16,16 @@ port can scan any directory that user can read, read the sources back, and apply
 copied to `backups/<executionId>/<path>` and hash-verified before the write, and rollback refuses if
 the file drifted since. Deleting the data directory therefore deletes the only backup the tool made.
 
-**Migrations are serialized per project inside one process.** Two `execute()` calls, or a rollback
-during a migration, queue or are refused rather than interleaving. Two *processes* pointed at the
-same project are not coordinated — the write-ahead claim is what would surface the damage, not
-prevention.
+**Migrations and scans are serialized per project across processes, with a bounded wait.** A
+database lock (owner pid + token) makes a second operation wait up to 30 seconds
+(`WEBLIFT_LOCK_WAIT_MS`) instead of interleaving, and the in-process queue still orders operations
+inside one process. A scan that has to wait stays `QUEUED`, shows the owner's pid and acquisition
+time, then starts when the lock is released; at the deadline it fails with a timeout reason.
+Migrations and rollbacks wait the same way and write nothing if the deadline expires. The lock is a
+bounded retry, not a FIFO queue: several waiters race, which is acceptable for a single-user tool. A
+live but hung owner holds the lock until the deadline (or until it is stopped), and PID reuse is a
+theoretical way to mistake a stale lock for a live owner. A rollback during an in-process migration
+is still refused immediately rather than queued.
 
 **A transaction is claimed in the database before it touches the disk.** If the process is killed
 between the write and its confirmation, the row stays `PENDING` and the history shows it as
@@ -29,11 +35,11 @@ the claim, or a disk that loses the file after a successful write.
 
 ## Analysis
 
-**Only the implemented pattern set is detected.** 42 rules cover the IE features listed in the
-specification plus a few closely related ones. Anything outside that set is invisible: a legacy
-`document.body.clientHeight` quirk used for layout, `element.currentStyle`, `navigator.appName`
-branches written as comparisons against other IE strings, and so on. A clean scan means "none of
-the covered patterns were found", not "this page works on Chrome".
+**Only the implemented pattern set is detected.** 57 rules cover the IE features listed in the
+specification plus removed APIs found in real legacy code. Anything outside that set is still
+invisible: a legacy `document.body.clientHeight` layout quirk, `event.srcUrn`, `event.recordset`,
+`style.setExpression`, and so on. A clean scan means "none of the covered patterns were found", not
+"this page works on Chrome".
 
 **Comment and string safety is per-rule.** The AST-based rules cannot match inside comments or
 string literals. Two rules are text-based by necessity — conditional compilation (`@cc_on`) and
@@ -72,25 +78,53 @@ would swallow 20 findings is visible as such. That count is computed against the
 scan; creating the rule does not retro-apply it, so the visible result still arrives on the next
 scan (the dialog offers a rescan button).
 
-**Thirteen recipes, and "manual" covers three different situations.** Shipped recipes:
+**Fourteen recipes, and "manual" covers three different situations.** Shipped recipes:
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
-hack removal, and renaming a `-ms-` property whose value syntax matches the standard one.
-Everything else is reported as MANUAL or UNSUPPORTED, but MANUAL is not one thing:
+hack removal, renaming a `-ms-` property whose value syntax matches the standard one, and the
+function-level handler-signature rewrite. Everything else is reported as MANUAL or UNSUPPORTED,
+but MANUAL is not one thing:
 
 | Situation | Fixture count | What it really means |
 | --- | --- | --- |
-| Recipe exists, this occurrence fails its preconditions | 9 | Fix the surrounding code first — most of these are `window.event.returnValue = …`, which becomes convertible once the handler takes the event parameter. |
+| Recipe exists, this occurrence fails its preconditions | 9 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
 | Mechanical rewrite exists, recipe not implemented yet | 4 | Labelled "automatable later" in the UI with the reason. Remaining: `createEventObject`, `document.selection.createRange()`, and the `-ms-` properties whose value syntax differs (`-ms-flex`, `-ms-writing-mode`). |
-| Needs human judgement or a product decision | 54 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
+| Needs human judgement or a product decision | 44 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
 
 The first version of this tool collapsed all three into one MANUAL badge, which made real
 opportunities look impossible. The dashboard now reports "automatable later" separately.
 
 **`CONDITIONAL` is not a promise of equivalence.** Rewriting `attachEvent` to `addEventListener`
 changes what `this` refers to inside the handler and requires handlers that read `window.event`
-to take the event parameter instead. The recipe cannot see those consequences; the UI lists them
-as caveats that a human must confirm.
+to take the event parameter instead. The handler-signature recipe does that for handlers registered
+by reference in the same or another scanned file, and for handlers reached only through
+`on*="fn(...)"` calls in the same or another scanned file; existing parameters and arguments keep
+their order with `event` inserted first. A handler with existing parameters that is also registered
+by reference, a handler called outside an inline `on*` attribute, and registrations outside the
+project still need a human. The recipe cannot see those consequences; the UI lists them as caveats
+that a human must confirm.
+
+**Function-level handler migration is deliberately narrow.** It offers a zero-parameter handler when
+all of these hold across the scanned files: a registration by reference through `attachEvent`,
+`detachEvent`, `addEventListener`, `removeEventListener` or an `on*` property; the function name has
+no other use anywhere in the scanned files (a direct call, timer or callback blocks it); no
+`window.event` inside a nested function; no `arguments` use; no local `event` binding or parameter
+named `event`; and not `beforeunload`/`unload`. A handler with existing parameters is offered only
+when every call site is an inline `on*` call, because a by-reference registration would pass the
+browser event into the old first parameter instead of the new one. The recipe injects `event` first
+and replaces the handler's own `window.event` references. For a cross-file registration the finding is emitted in the definition file (a `.js`
+file), the registration file is not edited, and preview verifies that the registration file still
+has the hash it had at scan time; if it changed, the finding is blocked until a rescan. Inline
+`on*="fn(...)"` calls in the same or another file are a source; existing arguments are kept and
+`event` is inserted before them. Same-file calls are edited by the handler's recipe; a cross-file
+call site becomes its own finding linked to the definition by companion ids, so selecting either
+expands the plan to the definition and every call site. The multi-file transaction applies them
+together, and every call-site file must still match its scan-time hash: a changed call site marks
+the item stale and the execution refuses the whole plan. A non-inline call or an inline unit that
+intersects a JSP dynamic region blocks the group. The per-reference `window.event` findings covered by a handler are
+suppressed (in-file during analysis, cross-file in the project pass) and the file row's finding
+count is adjusted. Property rewrites (`srcElement`, `returnValue`, `cancelBubble`) become applicable
+only after a rescan, and the `attachEvent` registration is a separate migration.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,
@@ -134,6 +168,15 @@ also stops at 200 sample rows per side — the counts in the roll-up tables are 
 **Static validation is rule-level, per file.** It checks that the migrated rule stopped being
 reported for that file and that the file still parses. It cannot prove the feature still works.
 
+**Manual fix verification is next-scan-only and identity-based.** Marking a finding `FIXED_IN_CODE`
+only schedules verification. The next completed scan that shares the rule signature checks it, and
+only for files that were parsed completely in that scan; a skipped, binary, oversized or partially
+parsed file leaves the claim unverified. Identity is rule + file + whitespace-normalised snippet, so
+reformatting can look like a fix, and a rename or rule-set change defers verification. A disabled
+rule is skipped. If the finding is still present, both the old claim and the current occurrence
+become `VALIDATION_FAILED` (an occurrence ignored by a project rule is not overwritten); a later
+scan that no longer finds it validates the old claim. The burn-down still counts code, not statuses.
+
 **Browser validation needs an installed browser.** Playwright is a dev dependency and Chromium
 is downloaded separately; without it the endpoint answers `available: false` with instructions
 rather than failing. When present, the load check reports page errors and failed requests for a
@@ -145,11 +188,12 @@ the backup copy. Captures happen inside `execute()`, so a slow page delays the w
 screenshot times per page (max five pages). A page that fails to capture is reported per page and
 never fails the migration.
 
-**Visual regression is one viewport and one fixed threshold.** A capture is 1280×900 full page,
-compared against one baseline per page key with a per-channel threshold of 12. There is no
-multi-viewport matrix, no region masking (a live clock or ad slot will always differ), and no
-anti-aliasing-aware comparison. A zero-diff result means "this page did not change at this
-viewport", not "the layout is correct".
+**Visual regression supports a viewport matrix, with a fixed capture size and threshold per
+viewport.** The matrix endpoint captures desktop/tablet/mobile (or caller-supplied viewports) and
+stores one baseline per `<pageKey>@<viewport>`; selector masking is applied before comparison. Each
+capture is a full-page screenshot at that viewport's size, compared per channel with threshold 12,
+and a size change counts as a mismatch. There is no anti-aliasing-aware comparison. A zero-diff
+result means "this page did not change at this viewport", not "the layout is correct".
 
 **Visual baselines are per project and page key, stored on disk.** They are not versioned with
 the code, so a baseline captured against a broken page will happily "pass" forever. Re-capture
@@ -176,12 +220,19 @@ auto-detected. A GBK file without a declared charset will be decoded as UTF-8 wi
 characters, reported as a decode problem, and its findings may be mislocated. Set `forceEncoding`
 per project in that case.
 
-**A file that is not UTF-8 is scanned, but never migrated.** Detection, parsing and finding
-locations all work for Shift_JIS / EUC-JP / ISO-2022-JP, but writing back would require re-encoding
-the whole file, and the tool has no encoder for those charsets. Rewriting one as UTF-8 destroys
-every non-ASCII character in it — this was the behaviour until it was caught by review and covered
-by `backend/test/encodingSafety.test.ts`. Such files are now refused at preview time with an
-explicit reason; convert the file to UTF-8 (or migrate it by hand) and rescan.
+**Non-UTF-8 files are migrated in their own encoding, but only when the rewrite round-trips.**
+The file is decoded once, recipes edit that text, and the result is encoded back in the recorded
+encoding. Before anything is written, the tool decodes those bytes strictly and refuses the finding
+unless the result is character-for-character identical to the edited text. An unrepresentable
+character is never substituted with `?`; it blocks that finding, while the rest of the reviewed plan
+can still apply. BOMs are re-emitted from the original bytes, line endings are untouched, and
+rollback restores the original bytes. ISO-2022-JP is stateful, so the encoder may choose different
+escape sequences than the source even when the decoded text is identical. A forced encoding with no
+available encoder remains scan-only.
+
+**UTF-16 sources need a BOM to be discovered.** UTF-16 text is full of NUL bytes, which the binary
+probe reads as binary; the BOM exempts the file from that rule. UTF-32 is not a supported source
+encoding and stays classified as binary.
 
 **Large-file and binary handling is coarse.** Files above 2 MB are skipped with a recorded reason;
 binary detection is a NUL-byte probe over the first 8 KB.
@@ -210,8 +261,8 @@ the bottleneck — it is not a default because it measured slower.
 
 **Performance is single-process and synchronous per file.** The fixture (12 files) scans in ~0.3 s.
 A 5 000-file legacy tree will work but blocks the event loop in bursts; the orchestrator yields
-every 8 files so SSE progress and cancellation stay responsive. Parallel workers are the obvious
-next step.
+every 8 files so SSE progress and cancellation stay responsive. Worker threads are available but
+off by default (see above), and the batched commit path is what makes a hard kill recoverable.
 
 **Cancelling a scan stops between files, and keeps what it finished.** A file is written only once
 it has been fully analysed, so the stored rows of a cancelled scan are a clean prefix of the work,
@@ -223,17 +274,30 @@ rule signature match are reused, the rest are parsed. Two caveats:
   cancellation is only observed as replies arrive — files already in flight still complete. The pool
   is off by default, and this is one more reason not to turn it on for large trees.
 
+**A hard-killed scan keeps its last committed batch.** Results are persisted every 25 files by
+default (`WEBLIFT_SCAN_FLUSH_EVERY` overrides it) in one transaction covering files, findings,
+parse problems and reference facts; the file row is written last, so its presence proves the rest
+of that file's batch is there. A kill loses only the files since the last commit, which are
+re-parsed. On the next start, a `RUNNING` scan whose recorded PID is no longer alive is marked
+`FAILED` with a reason, and the next scan reuses the persisted prefix. The project lock is reclaimed
+the same way, so a killed scan does not leave the project blocked. One limit remains: scans written
+before reference facts were stored have none, so a resumed scan copies their relations from the
+interrupted run and logs a warning instead of rebuilding them.
+
 ---
 
 ## Suggested next steps, in order of value
 
-1. **More recipes for the highest-volume patterns** once real projects show which ones dominate —
-   `document.all`, `element.innerText` and `window.event` handler signatures are the likely
-   candidates, each needing its own precondition argument.
-2. **Persist progress while the scan runs, not only when it stops.** A cancelled or failed scan is
-   saved, but a hard kill (`SIGKILL`, power loss) still loses the run, because rows are written when
-   the run ends. Writing a batch every N files would make even that case resumable.
-3. **Manual-status adoption.** Every MANUAL finding currently keeps its initial status until someone
-   touches it; a lightweight "fixed in code, verified by the next scan" loop would turn the dashboard
-   into a real burn-down chart instead of two independent snapshots.
+1. **More recipes for the highest-volume patterns** once real projects show which ones dominate.
+   The function-level handler signature now covers zero-argument handlers registered by reference,
+   same-file inline calls, cross-file inline calls, and parameterized handlers whose call sites are
+   all inline `on*` calls; the next candidates are timer/async uses of `window.event` and
+   by-reference registrations of parameterized handlers, each needing its own precondition argument.
+2. **Broaden detection coverage further.** Remaining examples include `event.srcUrn`,
+   `event.recordset`, `style.setExpression` and the layout quirks around
+   `document.body.clientHeight`. Each needs a rule, metadata and a firing fixture before it can be
+   reported.
+3. **Make the project lock a strict FIFO queue.** Waiters currently poll and race; operations are
+   bounded and visible, but not ordered. A ticket table would make the order predictable when a
+   CLI and the UI compete for the same project.
 

@@ -24,6 +24,7 @@ import type {
   VisualBaseline,
   IgnoreRule,
 } from '../model/types.js';
+import type { FileRefFacts } from '../analysis/projectReferences.js';
 import { newId, nowIso } from '../model/ids.js';
 
 export interface ScanFileRow {
@@ -40,6 +41,32 @@ export interface ScanFileRow {
   reused: boolean;
 }
 
+export interface ProjectLockInfo {
+  projectId: string;
+  ownerPid: number;
+  ownerToken: string;
+  acquiredAt: string;
+}
+
+export type ProjectLockResult =
+  | { ok: true; token: string; reclaimed: boolean }
+  | { ok: false; ownerPid: number; ownerToken: string; acquiredAt: string };
+
+export interface ScanBatch {
+  files: ScanFileRow[];
+  findings: AnalysisFinding[];
+  problems: ParseProblem[];
+  facts: FileRefFacts[];
+  counts: { scanned: number; parsed: number; failed: number; findings: number; currentFile: string | null };
+}
+
+export interface FindingStatusUpdate {
+  id: string;
+  status: FindingStatus;
+  actor: string;
+  note: string | null;
+}
+
 export interface FindingQuery {
   category?: Category;
   severity?: Severity;
@@ -53,6 +80,16 @@ export interface FindingQuery {
   sort?: 'risk' | 'path' | 'type' | 'priority';
   limit?: number;
   offset?: number;
+}
+
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 const SCHEMA = `
@@ -84,13 +121,22 @@ CREATE TABLE IF NOT EXISTS scan_task (
   resolved_count INTEGER NOT NULL DEFAULT 0,
   added_count INTEGER NOT NULL DEFAULT 0,
   current_file TEXT,
+  waiting_for TEXT,
   error_summary TEXT,
   config_snapshot TEXT NOT NULL,
   rule_signature TEXT,
   log_json TEXT NOT NULL DEFAULT '[]',
-  cancelled INTEGER NOT NULL DEFAULT 0
+  cancelled INTEGER NOT NULL DEFAULT 0,
+  runner_pid INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_scan_project ON scan_task(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_lock (
+  project_id TEXT PRIMARY KEY,
+  owner_pid INTEGER NOT NULL,
+  owner_token TEXT NOT NULL,
+  acquired_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS scan_file (
   id TEXT PRIMARY KEY,
@@ -163,6 +209,13 @@ CREATE TABLE IF NOT EXISTS file_relation (
   line INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_relation_task ON file_relation(scan_task_id);
+
+CREATE TABLE IF NOT EXISTS file_fact (
+  scan_task_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  facts_json TEXT NOT NULL,
+  PRIMARY KEY (scan_task_id, path)
+);
 
 CREATE TABLE IF NOT EXISTS parse_problem (
   id TEXT PRIMARY KEY,
@@ -280,6 +333,7 @@ export class Store {
     const { DatabaseSync } = loadSqlite();
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA busy_timeout = 5000;');
     this.db.exec('PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
     this.migrate();
@@ -326,6 +380,12 @@ export class Store {
     }
     if (!scanColumns.includes('added_count')) {
       this.db.exec('ALTER TABLE scan_task ADD COLUMN added_count INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!scanColumns.includes('runner_pid')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN runner_pid INTEGER');
+    }
+    if (!scanColumns.includes('waiting_for')) {
+      this.db.exec('ALTER TABLE scan_task ADD COLUMN waiting_for TEXT');
     }
     const fileColumns = (this.db.prepare('PRAGMA table_info(scan_file)').all() as unknown as Array<{ name: string }>).map(
       (row) => row.name,
@@ -397,6 +457,53 @@ export class Store {
     return Number(result.changes) > 0;
   }
 
+  tryAcquireProjectLock(projectId: string, ownerPid: number, token: string): ProjectLockResult {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const row = this.db
+        .prepare('SELECT * FROM project_lock WHERE project_id = ?')
+        .get(projectId) as { project_id: string; owner_pid: number; owner_token: string; acquired_at: string } | undefined;
+      if (row && row.owner_token !== token && processAlive(row.owner_pid)) {
+        this.db.exec('COMMIT');
+        return { ok: false, ownerPid: row.owner_pid, ownerToken: row.owner_token, acquiredAt: row.acquired_at };
+      }
+      const reclaimed = Boolean(row);
+      const at = nowIso();
+      if (row) {
+        this.db
+          .prepare('UPDATE project_lock SET owner_pid = ?, owner_token = ?, acquired_at = ? WHERE project_id = ?')
+          .run(ownerPid, token, at, projectId);
+      } else {
+        this.db
+          .prepare('INSERT INTO project_lock (project_id, owner_pid, owner_token, acquired_at) VALUES (?, ?, ?, ?)')
+          .run(projectId, ownerPid, token, at);
+      }
+      this.db.exec('COMMIT');
+      return { ok: true, token, reclaimed };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  releaseProjectLock(projectId: string, token: string): boolean {
+    const result = this.db.prepare('DELETE FROM project_lock WHERE project_id = ? AND owner_token = ?').run(projectId, token);
+    return Number(result.changes) > 0;
+  }
+
+  getProjectLock(projectId: string): ProjectLockInfo | null {
+    const row = this.db
+      .prepare('SELECT * FROM project_lock WHERE project_id = ?')
+      .get(projectId) as { project_id: string; owner_pid: number; owner_token: string; acquired_at: string } | undefined;
+    if (!row) return null;
+    return {
+      projectId: row.project_id,
+      ownerPid: row.owner_pid,
+      ownerToken: row.owner_token,
+      acquiredAt: row.acquired_at,
+    };
+  }
+
   /* ----------------------------- scans ----------------------------- */
 
   createScan(project: Project, config: ProjectConfig, ruleSignature: string | null): ScanTask {
@@ -419,9 +526,11 @@ export class Store {
       resolvedCount: 0,
       addedCount: 0,
       currentFile: null,
+      waitingFor: null,
       errorSummary: null,
       configSnapshot: config,
       ruleSignature,
+      runnerPid: null,
     };
     this.db
       .prepare(
@@ -450,7 +559,9 @@ export class Store {
         | 'resolvedCount'
         | 'addedCount'
         | 'currentFile'
+        | 'waitingFor'
         | 'errorSummary'
+        | 'runnerPid'
       >
     > & { cancelled?: boolean; logJson?: string },
   ): void {
@@ -470,9 +581,11 @@ export class Store {
       resolvedCount: 'resolved_count',
       addedCount: 'added_count',
       currentFile: 'current_file',
+      waitingFor: 'waiting_for',
       errorSummary: 'error_summary',
       cancelled: 'cancelled',
       logJson: 'log_json',
+      runnerPid: 'runner_pid',
     };
     for (const [key, column] of Object.entries(map)) {
       const value = (patch as Record<string, unknown>)[key];
@@ -492,9 +605,32 @@ export class Store {
 
   listScans(projectId?: string, limit = 100): ScanTask[] {
     const rows = projectId
-      ? (this.db.prepare('SELECT * FROM scan_task WHERE project_id = ? ORDER BY created_at DESC LIMIT ?').all(projectId, limit) as unknown as ScanRow[])
-      : (this.db.prepare('SELECT * FROM scan_task ORDER BY created_at DESC LIMIT ?').all(limit) as unknown as ScanRow[]);
+      ? (this.db.prepare('SELECT * FROM scan_task WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, limit) as unknown as ScanRow[])
+      : (this.db.prepare('SELECT * FROM scan_task ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit) as unknown as ScanRow[]);
     return rows.map(mapScan);
+  }
+
+  markInterruptedScans(currentPid: number): number {
+    const rows = this.db
+      .prepare("SELECT id, status, runner_pid FROM scan_task WHERE status IN ('RUNNING', 'QUEUED')")
+      .all() as Array<{ id: string; status: string; runner_pid: number | null }>;
+    let marked = 0;
+    for (const row of rows) {
+      if (row.status === 'QUEUED' && row.runner_pid === null) continue;
+      if (row.runner_pid !== null && (row.runner_pid === currentPid || processAlive(row.runner_pid))) continue;
+      this.updateScan(row.id, {
+        status: 'FAILED',
+        completedAt: nowIso(),
+        currentFile: null,
+        waitingFor: null,
+        errorSummary:
+          row.status === 'QUEUED'
+            ? 'The scan process stopped while waiting for the project lock.'
+            : 'The scan process stopped before completion. Files that finished were kept and can be reused by the next scan.',
+      });
+      marked += 1;
+    }
+    return marked;
   }
 
   getScanLog(id: string): Array<{ at: string; level: string; phase: string | null; message: string }> {
@@ -509,27 +645,64 @@ export class Store {
 
   /* ----------------------------- scan files ----------------------------- */
 
-  insertScanFiles(rows: ScanFileRow[]): void {
+  private writeScanFiles(rows: ScanFileRow[]): void {
     const stmt = this.db.prepare(
       `INSERT INTO scan_file (id, scan_task_id, path, language, size, hash, encoding, parse_status, finding_count, reused)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    for (const row of rows) {
+      stmt.run(
+        row.id,
+        row.scanTaskId,
+        row.path,
+        row.language,
+        row.size,
+        row.hash,
+        row.encoding,
+        row.parseStatus,
+        row.findingCount,
+        row.reused ? 1 : 0,
+      );
+    }
+  }
+
+  insertScanFiles(rows: ScanFileRow[]): void {
     this.db.exec('BEGIN');
     try {
-      for (const row of rows) {
-        stmt.run(
-          row.id,
-          row.scanTaskId,
-          row.path,
-          row.language,
-          row.size,
-          row.hash,
-          row.encoding,
-          row.parseStatus,
-          row.findingCount,
-          row.reused ? 1 : 0,
+      this.writeScanFiles(rows);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  incrementScanFileFindingCount(scanTaskId: string, path: string, delta: number): void {
+    this.db
+      .prepare('UPDATE scan_file SET finding_count = finding_count + ? WHERE scan_task_id = ? AND path = ?')
+      .run(delta, scanTaskId, path);
+  }
+
+  insertScanBatch(scanTaskId: string, batch: ScanBatch): void {
+    this.db.exec('BEGIN');
+    try {
+      this.writeFindings(batch.findings);
+      this.writeParseProblems(scanTaskId, batch.problems);
+      this.writeFileFacts(scanTaskId, batch.facts);
+      this.writeScanFiles(batch.files);
+      this.db
+        .prepare(
+          `UPDATE scan_task SET scanned_file_count = ?, parsed_file_count = ?, failed_file_count = ?,
+            finding_count = ?, current_file = ? WHERE id = ?`,
+        )
+        .run(
+          batch.counts.scanned,
+          batch.counts.parsed,
+          batch.counts.failed,
+          batch.counts.findings,
+          batch.counts.currentFile,
+          scanTaskId,
         );
-      }
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -574,52 +747,107 @@ export class Store {
     };
   }
 
+  private writeFileFacts(scanTaskId: string, facts: FileRefFacts[]): void {
+    if (facts.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT INTO file_fact (scan_task_id, path, facts_json) VALUES (?, ?, ?)
+       ON CONFLICT(scan_task_id, path) DO UPDATE SET facts_json = excluded.facts_json`,
+    );
+    for (const fact of facts) stmt.run(scanTaskId, fact.path, JSON.stringify(fact));
+  }
+
+  insertFileFacts(scanTaskId: string, facts: FileRefFacts[]): void {
+    if (facts.length === 0) return;
+    this.db.exec('BEGIN');
+    try {
+      this.writeFileFacts(scanTaskId, facts);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  listFileFacts(scanTaskId: string): FileRefFacts[] {
+    const rows = this.db
+      .prepare('SELECT facts_json FROM file_fact WHERE scan_task_id = ? ORDER BY path')
+      .all(scanTaskId) as Array<{ facts_json: string }>;
+    const facts: FileRefFacts[] = [];
+    for (const row of rows) {
+      try {
+        const fact = JSON.parse(row.facts_json) as FileRefFacts;
+        if (
+          !fact ||
+          typeof fact.path !== 'string' ||
+          !Array.isArray(fact.imports) ||
+          !Array.isArray(fact.defines) ||
+          !Array.isArray(fact.calls)
+        ) {
+          continue;
+        }
+        facts.push(fact);
+      } catch {
+        continue;
+      }
+    }
+    return facts;
+  }
+
   /* ----------------------------- findings ----------------------------- */
 
-  insertFindings(findings: AnalysisFinding[]): void {
+  private writeFindings(findings: AnalysisFinding[]): void {
     const stmt = this.db.prepare(
       `INSERT INTO finding (id, scan_task_id, rule_id, rule_version, file_path, language, start_line, end_line,
         start_column, end_column, start_offset, end_offset, category, severity, migration_level, confidence,
         message, message_key, message_params, risk, recommendation, evidence_json, snippet, status, status_updated_at, status_note)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    for (const f of findings) {
+      stmt.run(
+        f.id,
+        f.scanTaskId,
+        f.ruleId,
+        f.ruleVersion,
+        f.filePath,
+        f.language,
+        f.startLine,
+        f.endLine,
+        f.startColumn,
+        f.endColumn,
+        f.startOffset,
+        f.endOffset,
+        f.category,
+        f.severity,
+        f.migrationLevel,
+        f.confidence,
+        f.message,
+        f.messageKey,
+        JSON.stringify(f.messageParams ?? {}),
+        f.risk,
+        f.recommendation,
+        JSON.stringify(f.evidence),
+        f.snippet,
+        f.status,
+        f.statusUpdatedAt,
+        f.statusNote ?? null,
+      );
+    }
+  }
+
+  insertFindings(findings: AnalysisFinding[]): void {
     this.db.exec('BEGIN');
     try {
-      for (const f of findings) {
-        stmt.run(
-          f.id,
-          f.scanTaskId,
-          f.ruleId,
-          f.ruleVersion,
-          f.filePath,
-          f.language,
-          f.startLine,
-          f.endLine,
-          f.startColumn,
-          f.endColumn,
-          f.startOffset,
-          f.endOffset,
-          f.category,
-          f.severity,
-          f.migrationLevel,
-          f.confidence,
-          f.message,
-          f.messageKey,
-          JSON.stringify(f.messageParams ?? {}),
-          f.risk,
-          f.recommendation,
-          JSON.stringify(f.evidence),
-          f.snippet,
-          f.status,
-          f.statusUpdatedAt,
-          f.statusNote ?? null,
-        );
-      }
+      this.writeFindings(findings);
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
     }
+  }
+
+  deleteFinding(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM finding WHERE id = ?').run(id);
+    return Number(result.changes) > 0;
   }
 
   getFinding(id: string): AnalysisFinding | null {
@@ -725,6 +953,20 @@ export class Store {
     return rows.map(mapFinding);
   }
 
+  applyStatusUpdates(updates: FindingStatusUpdate[]): void {
+    if (updates.length === 0) return;
+    this.db.exec('BEGIN');
+    try {
+      for (const update of updates) {
+        this.updateFindingStatus(update.id, update.status, update.actor, update.note);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   updateFindingStatus(id: string, status: FindingStatus, actor: string, note: string | null): AnalysisFinding | null {
     const existing = this.getFinding(id);
     if (!existing) return null;
@@ -793,15 +1035,19 @@ export class Store {
 
   /* ----------------------------- parse problems ----------------------------- */
 
-  insertParseProblems(scanTaskId: string, problems: ParseProblem[]): void {
+  private writeParseProblems(scanTaskId: string, problems: ParseProblem[]): void {
     const stmt = this.db.prepare(
       'INSERT INTO parse_problem (id, scan_task_id, file_path, phase, message, line, column, recovered) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     );
+    for (const p of problems) {
+      stmt.run(newId('prb'), scanTaskId, p.filePath, p.phase, p.message, p.line ?? null, p.column ?? null, p.recovered ? 1 : 0);
+    }
+  }
+
+  insertParseProblems(scanTaskId: string, problems: ParseProblem[]): void {
     this.db.exec('BEGIN');
     try {
-      for (const p of problems) {
-        stmt.run(newId('prb'), scanTaskId, p.filePath, p.phase, p.message, p.line ?? null, p.column ?? null, p.recovered ? 1 : 0);
-      }
+      this.writeParseProblems(scanTaskId, problems);
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -1065,9 +1311,11 @@ interface ScanRow {
   resolved_count: number;
   added_count: number;
   current_file: string | null;
+  waiting_for: string | null;
   error_summary: string | null;
   config_snapshot: string;
   rule_signature: string | null;
+  runner_pid: number | null;
 }
 
 interface ScanFileRowRaw {
@@ -1195,9 +1443,11 @@ function mapScan(row: ScanRow): ScanTask {
     resolvedCount: row.resolved_count,
     addedCount: row.added_count,
     currentFile: row.current_file,
+    waitingFor: row.waiting_for ?? null,
     errorSummary: row.error_summary,
     configSnapshot: JSON.parse(row.config_snapshot) as ProjectConfig,
     ruleSignature: row.rule_signature ?? null,
+    runnerPid: row.runner_pid ?? null,
   };
 }
 

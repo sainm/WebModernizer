@@ -60,6 +60,7 @@ export type FindingStatus =
   | 'READY_FOR_MIGRATION'
   | 'MIGRATED'
   | 'REVIEW_REQUIRED'
+  | 'FIXED_IN_CODE'
   | 'VALIDATED'
   | 'VALIDATION_FAILED'
   | 'IGNORED';
@@ -263,11 +264,15 @@ export interface ScanTask {
   /** Findings that did not exist in `comparedScanId`. */
   addedCount: number;
   currentFile: string | null;
+  /** Owner details while a queued scan waits for the project lock. */
+  waitingFor: string | null;
   errorSummary: string | null;
   /** Project config snapshot captured when the scan started */
   configSnapshot: ProjectConfig;
   /** Fingerprint of the rule + recipe set used for this scan; reuse is only valid when it matches. */
   ruleSignature: string | null;
+  /** Process that owns a running scan; null before it starts or for rows written by older builds. */
+  runnerPid: number | null;
 }
 
 export interface ScanSummary {
@@ -316,6 +321,7 @@ export interface MigrationPlanItem {
   ruleId: string;
   recipeId: string;
   filePath: string;
+  encoding: string;
   migrationLevel: MigrationLevel;
   applicable: boolean;
   blockedReasons: string[];

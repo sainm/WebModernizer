@@ -91,7 +91,7 @@ describe('multi-file migration transactions', () => {
     expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).not.toBe(jsBefore);
 
     const sessionId = result.executions[0].sessionId as string;
-    const rollback = h.service.rollbackSession(sessionId);
+    const rollback = await h.service.rollbackSession(sessionId);
     expect(rollback.ok).toBe(true);
     expect(rollback.affectedFindings).toBe(2);
 
@@ -102,7 +102,7 @@ describe('multi-file migration transactions', () => {
       expect(h.store.getMigration(execution.id)?.executionStatus).toBe('ROLLED_BACK');
     }
 
-    expect(h.service.rollbackSession(sessionId).ok).toBe(false);
+    expect((await h.service.rollbackSession(sessionId)).ok).toBe(false);
   });
 
   it('writes nothing at all when one file changed after the scan', async () => {
@@ -155,7 +155,7 @@ describe('multi-file migration transactions', () => {
     writeFileSync(cssPath, `${migratedCss}\n/* hand edited after migration */\n`);
 
     const sessionId = result.executions[0].sessionId as string;
-    const rollback = h.service.rollbackSession(sessionId);
+    const rollback = await h.service.rollbackSession(sessionId);
     expect(rollback.ok).toBe(false);
     expect(rollback.reason).toMatch(/changed after the migration/);
 
@@ -265,7 +265,7 @@ describe('write-ahead claims', () => {
     h.store.updateMigration(row.id, { executionStatus: 'PENDING' });
     expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).not.toBe(before);
 
-    const rollback = h.service.rollbackSession(result.sessionId);
+    const rollback = await h.service.rollbackSession(result.sessionId);
     expect(rollback.ok).toBe(true);
     expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).toBe(before);
     expect(h.store.getMigration(row.id)?.executionStatus).toBe('ROLLED_BACK');
@@ -285,7 +285,7 @@ describe('write-ahead claims', () => {
     h.store.updateMigration(row.id, { executionStatus: 'PENDING' });
     const atRest = readFileSync(join(h.projectDir, JS_FILE), 'utf8');
 
-    const rollback = h.service.rollbackSession(result.sessionId);
+    const rollback = await h.service.rollbackSession(result.sessionId);
     expect(rollback.ok).toBe(true);
     expect(readFileSync(join(h.projectDir, JS_FILE), 'utf8')).toBe(atRest);
     expect(h.store.getMigration(row.id)?.executionStatus).toBe('ROLLED_BACK');
@@ -318,7 +318,7 @@ describe('rollback while a migration is running', () => {
     });
     await new Promise((done) => setTimeout(done, 20));
 
-    const refused = h.service.rollbackSession(first.sessionId);
+    const refused = await h.service.rollbackSession(first.sessionId);
     expect(refused.ok).toBe(false);
     expect(refused.reason).toMatch(/migration is running/);
 
@@ -327,7 +327,7 @@ describe('rollback while a migration is running', () => {
     expect(second.ok).toBe(true);
 
     // Once it has finished, the same rollback goes through.
-    expect(h.service.rollbackSession(first.sessionId).ok).toBe(true);
+    expect((await h.service.rollbackSession(first.sessionId)).ok).toBe(true);
   });
 });
 

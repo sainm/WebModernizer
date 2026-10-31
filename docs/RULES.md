@@ -1,17 +1,17 @@
 # Rule catalog
 
-Generated from the running rule registry, so this file cannot drift from the code.
-Total: **42 rules**, **13 recipes**.
+Generated from the rule registry. The ruleDoc test fails if this file drifts from the source registry.
+Total: **57 rules**, **14 recipes**.
 
 ## Distribution by category
 
 | Category | Rules |
 | --- | --- |
-| JS_API | 4 |
-| DOM_API | 11 |
-| BROWSER_BEHAVIOR | 7 |
+| JS_API | 5 |
+| DOM_API | 21 |
+| BROWSER_BEHAVIOR | 10 |
 | ACTIVEX_VBSCRIPT | 4 |
-| HTML_COMPAT | 5 |
+| HTML_COMPAT | 6 |
 | CSS_COMPAT | 6 |
 | DYNAMIC_CODE | 5 |
 
@@ -50,6 +50,20 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-BEH-002 | navigator.appName IE check | javascript | BROWSER_BEHAVIOR | MEDIUM | MANUAL | — | ua-sniffing, behavior |
 | WL-DOM-001 | element.fireEvent | javascript | DOM_API | HIGH | CONDITIONAL | RCP-FIREEVENT | event, ie-only-api |
 | WL-BEH-001 | IE user-agent sniffing | javascript | BROWSER_BEHAVIOR | HIGH | MANUAL | — | ua-sniffing, behavior |
+| WL-DOM-005 | element.runtimeStyle | javascript | DOM_API | MEDIUM | MANUAL | — | computed-style, ie-only-api |
+| WL-DOM-006 | document.createStyleSheet | javascript | DOM_API | MEDIUM | MANUAL | — | stylesheet, ie-only-api |
+| WL-DOM-007 | element.setCapture | javascript | DOM_API | MEDIUM | MANUAL | — | event, ie-only-api |
+| WL-DOM-008 | event.toElement / fromElement | javascript | DOM_API | MEDIUM | MANUAL | — | event, ie-only-api |
+| WL-DOM-009 | document.frames | javascript | DOM_API | MEDIUM | MANUAL | — | frames, ie-only-api |
+| WL-DOM-010 | document.recalc | javascript | DOM_API | LOW | MANUAL | — | layout, removed-api |
+| WL-BEH-003 | window.showHelp | javascript | BROWSER_BEHAVIOR | MEDIUM | UNSUPPORTED | — | help, removed-api |
+| WL-BEH-004 | window.createPopup | javascript | BROWSER_BEHAVIOR | MEDIUM | UNSUPPORTED | — | popup, removed-api |
+| WL-DOM-011 | IE propertychange event | javascript | DOM_API | MEDIUM | MANUAL | — | event, ie-only-api |
+| WL-DOM-012 | element.addBehavior | javascript | DOM_API | MEDIUM | UNSUPPORTED | — | behavior, removed-api |
+| WL-DOM-013 | document.namespaces | javascript | DOM_API | MEDIUM | UNSUPPORTED | — | namespace, removed-api |
+| WL-DOM-014 | element.styleSheet | javascript | DOM_API | MEDIUM | MANUAL | — | stylesheet, ie-only-api |
+| WL-BEH-005 | window.offscreenBuffering | javascript | BROWSER_BEHAVIOR | LOW | MANUAL | — | performance, ie-only-api |
+| WL-JS-017 | IE event handler signature | javascript | JS_API | HIGH | CONDITIONAL | RCP-HANDLER-EVENT-PARAM | event, window-event, handler |
 | WL-HTML-001 | IE conditional comment | html | HTML_COMPAT | MEDIUM | MANUAL | — | conditional-comment, ie-only |
 | WL-HTML-002 | Legacy or IE-only element | html | HTML_COMPAT | MEDIUM | MANUAL | — | obsolete-element |
 | WL-HTML-003 | Obsolete script language attribute | html | HTML_COMPAT | LOW | SAFE | RCP-SCRIPT-LANGUAGE | obsolete-attribute |
@@ -59,6 +73,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-HTML-007 | XML data island | html | HTML_COMPAT | HIGH | MANUAL | — | data-binding, ie-only |
 | WL-HTML-008 | X-UA-Compatible meta tag | html | BROWSER_BEHAVIOR | LOW | SAFE | RCP-DROP-UA-COMPATIBLE | document-mode |
 | WL-HTML-009 | script for/event IE binding | html | BROWSER_BEHAVIOR | MEDIUM | UNSUPPORTED | — | event, ie-only |
+| WL-HTML-010 | onpropertychange attribute | html | HTML_COMPAT | MEDIUM | MANUAL | — | event, ie-only-attribute |
 | WL-CSS-001 | CSS expression() | css | CSS_COMPAT | HIGH | MANUAL | — | ie-only, dynamic-css |
 | WL-CSS-002 | CSS behavior property | css | CSS_COMPAT | HIGH | UNSUPPORTED | — | htc, blocker |
 | WL-CSS-003 | IE filter (progid / alpha) | css | CSS_COMPAT | MEDIUM | MANUAL | — | ie-only, filter |
@@ -84,6 +99,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-EXECSCRIPT | execScript -> indirect eval | CONDITIONAL | WL-JS-014 | Replaces window.execScript(code) with (0, eval)(code), which also evaluates in global scope. |
 | RCP-NAVIGATE | window.navigate -> location.assign | CONDITIONAL | WL-JS-016 | Replaces the IE navigation call with location.assign on the same argument. |
 | RCP-CSSRULES | styleSheet.rules -> cssRules | CONDITIONAL | WL-DOM-003 | Renames the property access on a stylesheet object. |
+| RCP-HANDLER-EVENT-PARAM | window.event handler -> event parameter | CONDITIONAL | WL-JS-017 | Adds an event parameter to a handler, replaces window.event, and passes event first from inline on* calls while keeping existing parameters and arguments in order. |
 | RCP-SCRIPT-LANGUAGE | Remove obsolete script language attribute | SAFE | WL-HTML-003 | Deletes language="JavaScript" from the <script> tag; Chrome infers the type anyway. |
 | RCP-DROP-UA-COMPATIBLE | Remove X-UA-Compatible document mode | SAFE | WL-HTML-008 | Deletes the IE document-mode <meta> tag, which Chrome ignores. |
 | RCP-DROP-CSS-HACK | Drop IE CSS hack declaration | SAFE | WL-CSS-005 | Deletes the star/underscore declaration or the \9 value hack. |

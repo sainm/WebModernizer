@@ -84,7 +84,7 @@ describe('batch-scoped migration', () => {
 
     // A single-row rollback restores everything that execute() call wrote, which is the
     // whole session: one file write here, but the scope is the transaction.
-    const rollback = service.rollback(first.id);
+    const rollback = await service.rollback(first.id);
     expect(rollback.ok).toBe(true);
     expect(rollback.affectedFindings).toBe(2);
     expect(rollback.sessionId).toBe(first.sessionId);
@@ -108,21 +108,21 @@ describe('batch-scoped migration', () => {
       if (findings.length === 0) return;
       const result = await service.execute(scanId, [findings[0].id]);
       const batchId = result.executions[0].batchId as string;
-      expect(service.rollbackBatch(batchId).ok).toBe(true);
-      const again = service.rollbackBatch(batchId);
+      expect((await service.rollbackBatch(batchId)).ok).toBe(true);
+      const again = await service.rollbackBatch(batchId);
       expect(again.ok).toBe(false);
       expect(again.reason).toMatch(/Already rolled back/);
       return;
     }
     const batchId = applied[0].batchId as string;
-    expect(service.rollbackBatch(batchId).ok).toBe(true);
-    const again = service.rollbackBatch(batchId);
+    expect((await service.rollbackBatch(batchId)).ok).toBe(true);
+    const again = await service.rollbackBatch(batchId);
     expect(again.ok).toBe(false);
     expect(again.reason).toMatch(/Already rolled back/);
   });
 
   it('reports unknown batches instead of pretending success', async () => {
-    const result = service.rollbackBatch('bat_does_not_exist');
+    const result = await service.rollbackBatch('bat_does_not_exist');
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('Unknown batch');
   });

@@ -42,8 +42,8 @@ node backend/dist/cli/scan.js --project examples/legacy-app --name "Legacy Order
 npm run stress
 ```
 
-Expected on the fixture: **12 files, 99 findings, 44 high risk, 22 auto-convertible (10 safe, 12 conditional),
-4 automatable-but-not-yet-implemented, 54 needing judgement, 10 unsupported**.
+Expected on the fixture: **12 files, 96 findings, 41 high risk, 29 auto-convertible (10 safe, 19 conditional),
+4 automatable-but-not-yet-implemented, 9 recipe-blocked, 44 needing judgement, 10 unsupported**.
 
 ### Optional: visual regression
 
@@ -62,9 +62,14 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 153 tests: parser, rules, per-rule coverage, rule metadata, message contract,
-                #            decoding, diff, recipes, batching, storage upgrade, visual diff,
-                #            ignore rules, incremental reuse
+npm test        # 245 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+                #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
+                #            visual diff, ignore rules, incremental reuse, crash recovery,
+                #            manual fix verification, removed-API detection, doc drift,
+                #            cross-process project locks, bounded lock waits,
+                #            remaining IE-only detection, handler signature migration,
+                #            cross-file handler migration, inline handler calls,
+                #            cross-file inline calls, handlers with existing parameters
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -80,12 +85,20 @@ like an IE API call inside a comment or a string literal must not be reported.
 | File discovery with symlink/traversal guards, binary and size filtering | done |
 | HTML, JavaScript, CSS parsing with source locations | done |
 | JSP: layered analysis of the static fragments, dynamic regions masked | done |
-| 42 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
+| 57 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
 | Scan pipeline with phases, SSE progress, cancel, persistence | done |
+| Crash-resumable scans: atomic batches during the run, stale RUNNING runs reclaimed, prefix reused | done |
+| Manual fix verification: mark fixed in code, next comparable scan records VALIDATED / VALIDATION_FAILED | done |
+| Cross-process project lock: scans queue up to 30 s (`WEBLIFT_LOCK_WAIT_MS`), migrations/rollbacks wait, dead owners reclaimed | done |
 | Dashboard, findings explorer with 3-pane layout + Monaco source view | done |
 | Cross-file reference graph with CONFIRMED / INFERRED / UNKNOWN edges | done |
-| 13 migration recipes with preview diff, hash-verified apply, batch rollback | done |
+| 14 migration recipes with preview diff, hash-verified apply, batch rollback | done |
+| Function-level handler migration: inject event first and replace window.event, keeping existing parameters and arguments in order | done |
+| Cross-file handler migration: a function defined in a shared file and registered by reference in another file | done |
+| Inline handler calls: same-file or cross-file, with cross-file call sites linked as companions in one multi-file plan | done |
+| Handlers with existing parameters: offered only when every call site is an inline on* call, so event is inserted first everywhere | done |
 | Static validation after migration | done |
+| Encoding-faithful write-back for non-UTF-8 sources (Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16, UTF-8 BOM) | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
 | Project-level ignore rules (rule + path glob, mandatory reason, impact preview, retro-apply) | done |
 | Scan comparison: fixed / introduced / unchanged against a baseline scan | done |
@@ -118,6 +131,26 @@ like an IE API call inside a comment or a string literal must not be reported.
    re-parses; execution compares the SHA-256 captured at preview time and aborts on mismatch.
 6. **A failed write never lands.** Files are written to a temp file, re-parsed, then renamed;
    any failure restores the backup and records a `FAILED` execution.
+7. **A finished file is persisted once, atomically.** Files, findings, parse problems and
+   reference facts commit in one batch, with the file row written last. A hard kill can therefore
+   never leave a file that looks analysed but has lost its findings.
+8. **A manual fix is a claim, not a result.** Marking a finding fixed only schedules verification;
+   the next comparable scan must no longer report it, and must have parsed its file completely,
+   before it becomes `VALIDATED`. Otherwise both the claim and the current occurrence become
+   `VALIDATION_FAILED`.
+9. **One writer per project, across processes.** Scans and migrations take a database lock keyed by
+   project, with owner pid and token. A second operation waits up to 30 seconds (configurable),
+   then fails with the owner's pid and acquisition time instead of interleaving; a queued scan shows
+   that reason in the UI. A lock whose owner is gone is reclaimed on the next acquire.
+10. **A function-level rewrite is anchored to the signature, not the body.** The handler finding
+    points at the function signature; the verified whole-function range and the exact window.event
+    spans travel in evidence. The scan suppresses the per-reference window.event findings for that
+    handler — in-file at analysis time, cross-file in the project pass — so the dashboard counts one
+    automatable unit rather than a misleading pile of manual ones. Inline `on*="fn()"` calls in the
+    same file are part of the same plan: the recipe passes `event` at the call site. A cross-file
+    inline call becomes its own finding linked to the definition by companion ids; selecting either
+    expands the plan to the definition and every call site. A cross-file registration is evidence
+    too: preview refuses if the registration file or any call-site file changed since the scan.
 
 ---
 
@@ -169,6 +202,10 @@ destroys every reported column. Decoding therefore happens once, before parsing:
 - BOM → declared `charset` / `pageEncoding` → strict UTF-8 → heuristic scoring (Shift_JIS, EUC-JP,
   ISO-2022-JP, UTF-16LE/BE).
 - The chosen encoding is stored per file and shown in the UI and report.
+- Migrations encode the edited text back in that same encoding (iconv-lite for Windows-31J,
+  EUC-JP and UTF-16; encoding-japanese for ISO-2022-JP, which iconv-lite does not provide) and
+  refuse the edit unless decoding the result reproduces the text exactly. BOMs and line endings
+  are preserved.
 - **GBK / GB18030 are intentionally excluded** from the default candidate list. They can still be
   forced per project with `forceEncoding`, but they are not auto-detected.
 
@@ -187,8 +224,9 @@ detected and that findings inside it land on the correct line.
 - Migration creates a hash-verified backup under `data/backups/<executionId>/` before writing.
 - Migration applies the plan that was previewed: the client echoes the plan's digest and the server
   refuses anything that no longer matches, instead of recomputing a fresh set of edits.
-- A file whose detected encoding is not UTF-8 is never rewritten — doing so would re-encode the
-  whole file; convert it first.
+- Non-UTF-8 files are rewritten in their detected encoding, and only when the edited text
+  survives a strict round trip through that encoding. An unrepresentable character blocks the
+  edit instead of being substituted; a file whose encoding has no encoder is refused.
 - Deleting a project removes the database record only, never the source tree.
 - Rollback refuses to run when the file changed after the migration (that would discard newer edits).
 
@@ -199,20 +237,20 @@ detected and that findings inside it land on the correct line.
 | # | Criterion | Where |
 | --- | --- | --- |
 | 1 | Scan a given local legacy project | `POST /api/projects/:id/scans`, CLI |
-| 2 | Classify the covered IE issues | 42 rules, `docs/RULES.md` |
+| 2 | Classify the covered IE issues | 57 rules, `docs/RULES.md` |
 | 3 | Every finding locates file + position | `analysis/engine.ts`, verified in tests |
 | 4 | Evidence and recommendation per finding | `AnalysisFinding.risk/recommendation/evidence` |
 | 5 | Dashboard → findings | Scan detail cards link into the explorer |
 | 6 | Filter down to a specific problem | Findings explorer (severity/level/status/category/rule/path/search) |
 | 7 | Confirmed page↔script references | `analysis/projectReferences.ts`, dependency view |
 | 8 | Report parse failures and unknown deps | `parse_problem` table, `UNKNOWN` edges |
-| 9 | Preview at least one real transformation | 5 recipes, `POST /api/migrations/preview` |
+| 9 | Preview at least one real transformation | 14 recipes, `POST /api/migrations/preview` |
 | 10 | See the diff before/after | Monaco side-by-side diff |
 | 11 | No silent overwrite on failure | temp write → re-parse → rename, backup restore |
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 83 tests |
+| 15 | Automated tests for core behaviour | 245 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

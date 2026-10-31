@@ -520,6 +520,51 @@ define({
   },
 });
 
+define({
+  meta: {
+    id: 'WL-HTML-010',
+    name: 'onpropertychange attribute',
+    version: '1.0.0',
+    description: 'IE-only inline propertychange handler. Chrome never fires it; MutationObserver is the replacement.',
+    language: 'html',
+    category: 'HTML_COMPAT',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'Attribute name onpropertychange on any element.',
+    tags: ['event', 'ie-only-attribute'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    const html = ctx.parsed.html;
+    if (!html) return out;
+    for (const element of html.elements) {
+      const tag = (element.tagName ?? '').toLowerCase();
+      for (const attr of element.attrs ?? []) {
+        if (attr.name.toLowerCase() !== 'onpropertychange') continue;
+        const loc = attributeLocation(element, attr.name);
+        if (!loc) continue;
+        out.push(
+          makeFinding(asRule(this), ctx, {
+            startOffset: loc.startOffset,
+            endOffset: loc.endOffset,
+            message: 'Uses IE-only onpropertychange attribute',
+            risk:
+              'Chrome never fires the propertychange event, so this inline handler never runs and any UI that depends on the change stays stale. No error is reported, which makes the loss easy to miss.',
+            recommendation:
+              'Remove the attribute and observe the relevant element or subtree with MutationObserver. Map record.attributeName to the logic the inline handler performed, and apply the initial state once at startup.',
+            evidence: {
+              kind: 'Attribute',
+              matched: ctx.text.slice(loc.startOffset, loc.endOffset),
+              detail: { attribute: 'onpropertychange', tag, value: attr.value.slice(0, 80) },
+            },
+          }),
+        );
+      }
+    }
+    return out;
+  },
+});
+
 export const htmlRules: RuleDraft[] = ruleList;
 export { asRule, rawAttributeValue };
 export type { P5Node };

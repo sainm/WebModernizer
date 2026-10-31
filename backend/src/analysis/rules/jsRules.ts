@@ -1,4 +1,5 @@
 import { findEnclosingParam, memberPath, walkJs, type JsNode } from '../../parser/jsParser.js';
+import { findMigratableHandlers } from '../handlers.js';
 import type { FileContext, RawFinding, Rule, RuleDraft } from '../types.js';
 import { makeFinding } from '../finding.js';
 
@@ -177,9 +178,14 @@ define({
   },
   detect(ctx) {
     const out: RawFinding[] = [];
+    const covered = new Set<number>();
+    for (const handler of findMigratableHandlers(ctx)) {
+      for (const start of handler.windowEventStarts) covered.add(start);
+    }
     eachNode(ctx, (node, _ancestors, unit) => {
       if (node.type !== 'MemberExpression') return;
       if (memberPath(node) !== 'window.event') return;
+      if (covered.has(node.start ?? -1)) return;
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
           startOffset: node.start ?? 0,
@@ -1055,6 +1061,650 @@ define({
         }),
       );
     });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-005',
+    name: 'element.runtimeStyle',
+    version: '1.0.0',
+    description: 'IE-only writable runtime style object. Chrome reads computed values through getComputedStyle and writes through element.style.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property runtimeStyle on any object.',
+    tags: ['computed-style', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'runtimeStyle') return;
+      const object = (node.object as JsNode) ?? null;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Uses IE-only ${objectText || 'element'}.runtimeStyle`,
+          risk:
+            'runtimeStyle does not exist in Chrome, so reads return undefined and writes are ignored or throw. IE used it to override the cascade without touching the inline style object; the two concepts are not interchangeable.',
+          recommendation:
+            'Read computed values with getComputedStyle(element); write overrides with element.style.setProperty(name, value, priority). Check whether the code needed a cascade override or an ordinary inline style before choosing.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-006',
+    name: 'document.createStyleSheet',
+    version: '1.0.0',
+    description: 'IE-only API for adding a stylesheet at runtime. Chrome creates a style or link element instead.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: CallExpression whose callee is document.createStyleSheet.',
+    tags: ['stylesheet', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || callee.type !== 'MemberExpression' || propName(callee) !== 'createStyleSheet') return;
+      const object = callee.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || object.name !== 'document') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Calls IE-only document.createStyleSheet()',
+          risk:
+            'document.createStyleSheet is absent in Chrome, so the call throws and the stylesheet is never inserted. The returned object was also mutable in ways a standard CSSStyleSheet is not.',
+          recommendation:
+            'Create a <style> element, set its textContent (or a <link rel="stylesheet"> for a URL), append it to <head>, and use the standard sheet API when the code needs to address rules later.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'document.createStyleSheet', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-007',
+    name: 'element.setCapture',
+    version: '1.0.0',
+    description: 'IE-only mouse capture API. Chrome uses Pointer Events and setPointerCapture with a pointer id.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: CallExpression whose callee property is setCapture or releaseCapture.',
+    tags: ['event', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || callee.type !== 'MemberExpression') return;
+      const method = propName(callee);
+      if (method !== 'setCapture' && method !== 'releaseCapture') return;
+      const object = callee.object as JsNode | undefined;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Calls IE-only ${objectText || 'element'}.${method}()`,
+          risk:
+            'setCapture and releaseCapture do not exist in Chrome, so mouse capture silently fails: dragging outside the element stops delivering events. The standard pointer capture API is keyed by pointerId and fires different events.',
+          recommendation:
+            'Move the interaction to Pointer Events: call setPointerCapture(event.pointerId) in pointerdown and release it on pointerup or lostpointercapture. Verify the drag logic still receives the coordinates it expects.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { method, objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-008',
+    name: 'event.toElement / fromElement',
+    version: '1.0.0',
+    description: 'IE-only mouse event properties. Chrome exposes relatedTarget, with different semantics for some event types.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression toElement or fromElement on a parameter named like an event.',
+    tags: ['event', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression') return;
+      const api = propName(node);
+      if (api !== 'toElement' && api !== 'fromElement') return;
+      const confidence = eventObjectConfidence(node, ancestors);
+      if (!confidence.isEvent) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads IE-only ${confidence.objectName}.${api}`,
+          risk:
+            'toElement and fromElement are undefined in Chrome, so the comparison sees null and hover logic stops working. relatedTarget is the standard replacement, but it is only meaningful for mouseover/mouseout and focus events, and IE distinguished the direction differently.',
+          recommendation:
+            'Replace with event.relatedTarget and branch on event.type (mouseover vs mouseout). Null is normal when the pointer entered or left the document; confirm the old code treated that case the same way.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api, objectName: confidence.objectName ?? '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-009',
+    name: 'document.frames',
+    version: '1.0.0',
+    description: 'IE-only collection of frame windows. Chrome exposes window.frames instead.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property frames whose object is the document identifier.',
+    tags: ['frames', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'frames') return;
+      const object = node.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || object.name !== 'document') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Uses IE-only document.frames',
+          risk:
+            'document.frames is undefined in Chrome, so indexing or reading length throws. window.frames is the standard collection, but named access and cross-origin rules differ.',
+          recommendation:
+            'Use window.frames (or document.querySelectorAll("iframe") when you need the elements). Check whether the code relied on name lookup, numeric indexes or cross-frame function calls, and test with the frames loaded.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'document.frames', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-010',
+    name: 'document.recalc',
+    version: '1.0.0',
+    description: 'IE-only forced layout API. Chrome recalculates layout when a layout property is read.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'LOW',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: CallExpression whose callee is document.recalc.',
+    tags: ['layout', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || callee.type !== 'MemberExpression' || propName(callee) !== 'recalc') return;
+      const object = callee.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || object.name !== 'document') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Calls IE-only document.recalc()',
+          risk:
+            'document.recalc does not exist in Chrome and the call throws. Its purpose was to force layout before measuring; Chrome flushes layout when a layout property is read, so the explicit call is usually unnecessary.',
+          recommendation:
+            'Remove the call and read the layout property that the following code needs (offsetWidth, getBoundingClientRect). If the code depended on timing, move the measurement into requestAnimationFrame and compare the visual result.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'document.recalc', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-BEH-003',
+    name: 'window.showHelp',
+    version: '1.0.0',
+    description: 'Removed IE help window API. Chrome has no in-browser replacement for it.',
+    language: 'javascript',
+    category: 'BROWSER_BEHAVIOR',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'UNSUPPORTED',
+    basis: 'AST match: CallExpression or NewExpression calling window.showHelp or a bare showHelp.',
+    tags: ['help', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression' && node.type !== 'NewExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee) return;
+      const isBare = callee.type === 'Identifier' && String(callee.name ?? '').toLowerCase() === 'showhelp';
+      const isWindow =
+        callee.type === 'MemberExpression' &&
+        propName(callee) === 'showHelp' &&
+        (callee.object as JsNode | undefined)?.type === 'Identifier' &&
+        ((callee.object as JsNode).name as string) === 'window';
+      if (!isBare && !isWindow) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Calls removed API window.showHelp()',
+          risk:
+            'window.showHelp was removed with IE and does not exist in Chrome, so the call throws and the help window never opens. There is no built-in replacement for the WinHelp format.',
+          recommendation:
+            'Decide where the help content lives now: open a maintained HTML help page with window.open, or route to an in-app help panel. Confirm the content is still available before removing the entry point.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'window.showHelp', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-BEH-004',
+    name: 'window.createPopup',
+    version: '1.0.0',
+    description: 'Removed IE popup API. Chrome builds the same UI from positioned elements or dialog elements.',
+    language: 'javascript',
+    category: 'BROWSER_BEHAVIOR',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'UNSUPPORTED',
+    basis: 'AST match: CallExpression or NewExpression calling window.createPopup or a bare createPopup.',
+    tags: ['popup', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression' && node.type !== 'NewExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee) return;
+      const isBare = callee.type === 'Identifier' && String(callee.name ?? '').toLowerCase() === 'createpopup';
+      const isWindow =
+        callee.type === 'MemberExpression' &&
+        propName(callee) === 'createPopup' &&
+        (callee.object as JsNode | undefined)?.type === 'Identifier' &&
+        ((callee.object as JsNode).name as string) === 'window';
+      if (!isBare && !isWindow) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Calls removed API window.createPopup()',
+          risk:
+            'window.createPopup was removed with IE, so the call throws and any menu built on top of it never appears. The IE popup was clipped to the viewport and dismissed on outside clicks by the browser.',
+          recommendation:
+            'Rebuild the UI as a positioned element or a <dialog>; implement outside-click dismissal and viewport clamping explicitly. Confirm keyboard focus and stacking order match the old behaviour.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'window.createPopup', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-011',
+    name: 'IE propertychange event',
+    version: '1.0.0',
+    description: 'IE-only propertychange event and event.propertyName. Chrome reports DOM changes through MutationObserver.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: event-parameter .propertyName, or any .onpropertychange member.',
+    tags: ['event', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression') return;
+      const api = propName(node);
+      if (api === 'propertyName') {
+        const confidence = eventObjectConfidence(node, ancestors);
+        if (!confidence.isEvent) return;
+        out.push(
+          makeFinding(this as unknown as Rule, ctx, {
+            variant: 'propertyName',
+            startOffset: node.start ?? 0,
+            endOffset: node.end ?? 0,
+            message: `Reads IE-only ${confidence.objectName}.propertyName`,
+            risk:
+              'propertyName only exists on IE propertychange events. Chrome never fires propertychange, so the handler that reads it never runs and the UI that depended on the change stays stale without an error.',
+            recommendation:
+              'Observe the element or subtree with MutationObserver. Map record.attributeName (or record.type for a childList observer) to the logic the propertychange handler performed, and verify the initial state is applied separately.',
+            evidence: {
+              kind: 'MemberExpression',
+              matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+              container: unit.container,
+              detail: { api: 'propertyName', objectName: confidence.objectName ?? '(unknown)', touchesDynamicRegion: unit.dynamic },
+            },
+          }),
+        );
+        return;
+      }
+      if (api === 'onpropertychange') {
+        const object = (node.object as JsNode) ?? null;
+        const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+        out.push(
+          makeFinding(this as unknown as Rule, ctx, {
+            variant: 'onpropertychange',
+            startOffset: node.start ?? 0,
+            endOffset: node.end ?? 0,
+            message: `Uses IE-only ${objectText || 'element'}.onpropertychange`,
+            risk:
+              'Chrome does not implement the propertychange event, so assigning onpropertychange registers nothing and the handler never runs. There is no error; the missing updates are silent.',
+            recommendation:
+              'Replace the handler with a MutationObserver on the element or subtree, translate attribute changes to the old property logic, and remove the IE assignment.',
+            evidence: {
+              kind: 'MemberExpression',
+              matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+              container: unit.container,
+              detail: { api: 'onpropertychange', objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+            },
+          }),
+        );
+      }
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-012',
+    name: 'element.addBehavior',
+    version: '1.0.0',
+    description: 'IE-only HTC behavior attachment. Chrome has no addBehavior and does not load .htc files.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'UNSUPPORTED',
+    basis: 'AST match: CallExpression whose callee property is addBehavior or removeBehavior.',
+    tags: ['behavior', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || callee.type !== 'MemberExpression') return;
+      const method = propName(callee);
+      if (method !== 'addBehavior' && method !== 'removeBehavior') return;
+      const object = callee.object as JsNode | undefined;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Calls IE-only ${objectText || 'element'}.${method}()`,
+          risk:
+            'HTC behaviors and addBehavior are IE-only. In Chrome the method is undefined, so the call throws and none of the behavior code loads; any event wiring or rendering it performed is gone.',
+          recommendation:
+            'Move the behavior implementation into a normal JavaScript module or custom element, attach its listeners explicitly, and port its CSS. Test the interaction that depended on the behavior, not just page load.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: method, method, objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-013',
+    name: 'document.namespaces',
+    version: '1.0.0',
+    description: 'IE-only namespace registration used for VML and other non-standard markup. Chrome has no such API.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'UNSUPPORTED',
+    basis: 'AST match: MemberExpression with property namespaces whose object is the document identifier.',
+    tags: ['namespace', 'removed-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'namespaces') return;
+      const object = node.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || object.name !== 'document') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Uses IE-only document.namespaces',
+          risk:
+            'document.namespaces is undefined in Chrome, so the call throws. It was used to register VML or other IE-only XML dialects; even if the namespace were registered, Chrome would not render that markup.',
+          recommendation:
+            'Replace the feature with SVG or canvas (or a library built on them). There is no namespace equivalent to port to; treat this as a capability decision and verify the rendered output.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'document.namespaces', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-014',
+    name: 'element.styleSheet',
+    version: '1.0.0',
+    description: 'IE-only stylesheet object on style and link elements. Chrome exposes element.sheet instead.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property styleSheet, excluding the styleSheet.rules chain handled separately.',
+    tags: ['stylesheet', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'styleSheet') return;
+      const parent = ancestors[ancestors.length - 1];
+      if (parent?.type === 'MemberExpression' && propName(parent) === 'rules') return;
+      const object = node.object as JsNode | undefined;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : '';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads IE-only ${objectText || 'element'}.styleSheet`,
+          risk:
+            'element.styleSheet is undefined in Chrome, so the following access throws. Chrome exposes the CSSOM through element.sheet on <style> and <link> elements; the object shape is similar but not identical.',
+          recommendation:
+            'Read element.sheet instead, confirm the element is a style or link element, and adjust CSSOM calls (insertRule/deleteRule, cssRules) to the standard interface.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'styleSheet', objectText: objectText || '(unknown)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-BEH-005',
+    name: 'window.offscreenBuffering',
+    version: '1.0.0',
+    description: 'IE-only rendering performance hint. Chrome ignores the property; it neither throws nor buffers offscreen.',
+    language: 'javascript',
+    category: 'BROWSER_BEHAVIOR',
+    defaultSeverity: 'LOW',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property offscreenBuffering whose object is the window identifier.',
+    tags: ['performance', 'ie-only-api'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'offscreenBuffering') return;
+      const object = node.object as JsNode | undefined;
+      if (!object || object.type !== 'Identifier' || object.name !== 'window') return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: 'Uses IE-only window.offscreenBuffering',
+          risk:
+            'Chrome ignores window.offscreenBuffering. It does not throw, but the offscreen buffering the code requested never happens, so any rendering workaround that relied on it is silently absent.',
+          recommendation:
+            'Remove the assignment. If it was added to fix a perceived performance problem, measure the interaction after removal and address the actual cost instead of porting the hint.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { api: 'window.offscreenBuffering', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-JS-017',
+    name: 'IE event handler signature',
+    version: '1.4.0',
+    description: 'Handler that reads window.event. Chrome passes the event first; existing parameters are kept when every call site is an inline on* call.',
+    language: 'javascript',
+    category: 'JS_API',
+    defaultSeverity: 'HIGH',
+    defaultMigrationLevel: 'CONDITIONAL',
+    basis: 'AST match: function reading window.event; by-reference registrations, inline on* calls, or cross-file calls; parameters only with inline-only call sites.',
+    recipeId: 'RCP-HANDLER-EVENT-PARAM',
+    tags: ['event', 'window-event', 'handler'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    for (const handler of findMigratableHandlers(ctx)) {
+      const count = handler.windowEventNodes.length;
+      const inlineCount = handler.inlineCallCount;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          variant: inlineCount > 0 ? 'inline' : undefined,
+          startOffset: handler.start,
+          endOffset: handler.signatureEnd,
+          message:
+            inlineCount > 0
+              ? `IE event handler ${handler.name} uses window.event (${count} reference${count === 1 ? '' : 's'}, ${inlineCount} inline call${inlineCount === 1 ? '' : 's'})`
+              : `IE event handler ${handler.name} uses window.event (${count} reference${count === 1 ? '' : 's'})`,
+          risk:
+            'The handler reads the IE-only window.event global. Chrome passes the event object as the first handler argument, so this handler throws on its first event unless the reference is rewritten. The transform is mechanical but changes the function signature.',
+          recommendation:
+            'Migrate this finding to add the event parameter and replace every window.event reference in the handler. Rescan afterwards: the srcElement, returnValue and cancelBubble reads then satisfy their own recipes. The attachEvent registration still needs its separate migration.',
+          evidence: {
+            kind: 'Function',
+            matched: ctx.text.slice(handler.start, handler.signatureEnd),
+            container: handler.container,
+            detail: {
+              handler: handler.name,
+              registration: handler.registration,
+              windowEventCount: count,
+              inlineCallCount: inlineCount,
+              paramCount: handler.paramCount,
+              inlineInDefinitionFile: inlineCount > 0,
+              handlerStart: handler.start,
+              handlerEnd: handler.end,
+            },
+          },
+        }),
+      );
+    }
     return out;
   },
 });

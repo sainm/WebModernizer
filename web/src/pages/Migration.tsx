@@ -76,6 +76,7 @@ export default function Migration() {
     try {
       const next = await api.preview(scanId, [...selected]);
       setPlan(next);
+      setSelected(new Set(next.items.map((item) => item.findingId)));
       if (next.items.every((item) => !item.applicable)) {
         toast(next.items.flatMap((item) => item.blockedReasons).join(' · ') || t('migration.blocked'));
       }
@@ -345,6 +346,11 @@ export default function Migration() {
                       <span className="mono muted" style={{ fontSize: 10.5 }}>
                         {item.filePath}:{item.startLine}
                       </span>
+                      {item.encoding ? (
+                        <span className="badge neutral mono" style={{ fontSize: 10 }}>
+                          {t('migration.encodingFaithful', { encoding: item.encoding })}
+                        </span>
+                      ) : null}
                       <div className="spacer" />
                       <span className={`badge ${item.applicable ? 'ok' : 'high'}`}>
                         {item.applicable ? t('migration.applicable') : t('migration.blocked')}

@@ -150,10 +150,18 @@ CREATE TABLE scan_task (
       // Old rows have no total, so the UI falls back to the scanned count for them.
       expect(scan?.totalFileCount).toBe(0);
       expect(scan?.ruleSignature).toBeNull();
+      expect(scan?.runnerPid).toBeNull();
+      expect(scan?.waitingFor).toBeNull();
 
-      // New rows can carry both.
-      store.updateScan('scn_old', { totalFileCount: 400, status: 'CANCELLED' });
+      // New rows can carry all of them.
+      store.updateScan('scn_old', { totalFileCount: 400, status: 'CANCELLED', runnerPid: 4242, waitingFor: 'pid 4242' });
       expect(store.getScan('scn_old')?.totalFileCount).toBe(400);
+      expect(store.getScan('scn_old')?.runnerPid).toBe(4242);
+      expect(store.getScan('scn_old')?.waitingFor).toBe('pid 4242');
+
+      // The reference-fact table is created for old data directories too.
+      store.insertFileFacts('scn_old', [{ path: 'js/a.js', imports: [], defines: ['a'], calls: [] }]);
+      expect(store.listFileFacts('scn_old')).toEqual([{ path: 'js/a.js', imports: [], defines: ['a'], calls: [] }]);
     } finally {
       store.close();
     }

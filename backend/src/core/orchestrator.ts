@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildCrossFileHandlerFindings } from '../analysis/crossFileHandlers.js';
 import { analyzeParsedFile } from '../analysis/engine.js';
 import { buildRelations, extractRefFacts, type FileRefFacts } from '../analysis/projectReferences.js';
 import { RECIPE_RULE_IDS, ruleSignature } from '../recipes/registry.js';
@@ -8,13 +9,15 @@ import { sha256, newId, nowIso } from '../model/ids.js';
 import type { AnalysisFinding, ParseProblem, ProjectConfig, ScanPhase, ScanStatus, ScanTask, SourceFile } from '../model/types.js';
 import { SCAN_PHASES } from '../model/types.js';
 import { makeSourceFile, parseSourceFile } from '../parser/index.js';
-import type { Store, ScanFileRow } from '../storage/store.js';
+import type { FindingStatusUpdate, Store, ScanFileRow } from '../storage/store.js';
 import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js';
 import { decodeBuffer } from './textDecode.js';
 import { writeScanReport } from './report.js';
 import { IGNORE_NOTE_PREFIX, findIgnoreMatch, ignoreNote } from './ignoreRules.js';
 import { compareFindings } from './compare.js';
 import { createParsePool, poolSizeFromEnv, type ParsePool } from './parsePool.js';
+import { acquireProjectLock, defaultLockWaitMs, projectBusyReason } from './projectLock.js';
+import { verifyManualFixes } from './verification.js';
 
 export interface ScanEvent {
   scanId: string;
@@ -126,28 +129,123 @@ interface Runner {
   cancelled: boolean;
   emitter: EventEmitter;
   log: Array<{ at: string; level: string; phase: string | null; message: string }>;
+  projectId: string;
+  lockToken: string;
 }
 
 const MAX_LOG_ENTRIES = 500;
 /** Files parsed between two event loop turns when no worker pool is used. */
 const YIELD_EVERY_FILES = 8;
+const DEFAULT_FLUSH_EVERY_FILES = 25;
+
+function flushBatchSize(): number {
+  const raw = Number(process.env.WEBLIFT_SCAN_FLUSH_EVERY);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : DEFAULT_FLUSH_EVERY_FILES;
+}
 
 const yieldToEventLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
 
 export class ScanManager {
   private readonly store: Store;
+  private readonly lockWaitMs: number;
   private readonly runners = new Map<string, Runner>();
 
-  constructor(store: Store) {
+  constructor(store: Store, options: { lockWaitMs?: number } = {}) {
     this.store = store;
+    this.lockWaitMs = options.lockWaitMs ?? defaultLockWaitMs();
+    this.store.markInterruptedScans(process.pid);
   }
 
-  start(scanId: string): void {
-    const runner: Runner = { cancelled: false, emitter: new EventEmitter(), log: [] };
+  start(scanId: string): { ok: boolean; reason?: string; queued?: boolean } {
+    const scan = this.store.getScan(scanId);
+    if (!scan) return { ok: false, reason: `Unknown scan ${scanId}` };
+    if (scan.status !== 'QUEUED') return { ok: false, reason: `Scan ${scanId} is ${scan.status}, not queued` };
+    if (this.runners.has(scanId)) return { ok: false, reason: `Scan ${scanId} is already started` };
+
+    const lockToken = newId('lck');
+    const lock = this.store.tryAcquireProjectLock(scan.projectId, process.pid, lockToken);
+    if (lock.ok) {
+      const runner: Runner = { cancelled: false, emitter: new EventEmitter(), log: [], projectId: scan.projectId, lockToken };
+      this.runners.set(scanId, runner);
+      void this.run(scanId, runner).catch((err) => {
+        this.log(runner, scanId, 'error', null, `Unhandled scan failure: ${(err as Error).message}`);
+      });
+      return { ok: true };
+    }
+
+    const reason = projectBusyReason(lock);
+    if (this.lockWaitMs <= 0) {
+      this.store.updateScan(scanId, {
+        status: 'FAILED',
+        completedAt: nowIso(),
+        waitingFor: null,
+        errorSummary: reason,
+        currentFile: null,
+      });
+      return { ok: false, reason };
+    }
+
+    const runner: Runner = { cancelled: false, emitter: new EventEmitter(), log: [], projectId: scan.projectId, lockToken };
     this.runners.set(scanId, runner);
-    void this.run(scanId, runner).catch((err) => {
-      this.log(runner, scanId, 'error', null, `Unhandled scan failure: ${(err as Error).message}`);
+    this.store.updateScan(scanId, { waitingFor: reason, runnerPid: process.pid });
+    void this.waitForLock(scanId, scan, runner).catch((err) => {
+      this.log(runner, scanId, 'error', null, `Unhandled scan wait failure: ${(err as Error).message}`);
     });
+    return { ok: true, queued: true };
+  }
+
+  private async waitForLock(scanId: string, scan: ScanTask, runner: Runner): Promise<void> {
+    const outcome = await acquireProjectLock(this.store, scan.projectId, process.pid, runner.lockToken, {
+      waitMs: this.lockWaitMs,
+      isCancelled: () => runner.cancelled,
+    });
+
+    if (runner.cancelled) {
+      this.runners.delete(scanId);
+      this.store.updateScan(scanId, {
+        status: 'CANCELLED',
+        completedAt: nowIso(),
+        waitingFor: null,
+        currentFile: null,
+      });
+      this.emit(runner, { scanId, type: 'done', at: nowIso(), status: 'CANCELLED' });
+      return;
+    }
+
+    if (outcome.result.ok) {
+      this.store.updateScan(scanId, { waitingFor: null });
+      try {
+        await this.run(scanId, runner);
+      } catch (err) {
+        this.store.releaseProjectLock(runner.projectId, runner.lockToken);
+        this.runners.delete(scanId);
+        const current = this.store.getScan(scanId);
+        if (!current || (current.status !== 'QUEUED' && current.status !== 'RUNNING')) return;
+        const reason = `The scan could not start after waiting for the project lock: ${(err as Error).message}`;
+        this.store.updateScan(scanId, {
+          status: 'FAILED',
+          completedAt: nowIso(),
+          waitingFor: null,
+          errorSummary: reason,
+          currentFile: null,
+        });
+        this.emit(runner, { scanId, type: 'error', at: nowIso(), status: 'FAILED', error: reason });
+      }
+      return;
+    }
+
+    this.runners.delete(scanId);
+    const reason = outcome.timedOut
+      ? `Timed out after ${Math.ceil(outcome.waitedMs / 1000)}s waiting for another operation on this project. ${projectBusyReason(outcome.result)}`
+      : projectBusyReason(outcome.result);
+    this.store.updateScan(scanId, {
+      status: 'FAILED',
+      completedAt: nowIso(),
+      waitingFor: null,
+      errorSummary: reason,
+      currentFile: null,
+    });
+    this.emit(runner, { scanId, type: 'error', at: nowIso(), status: 'FAILED', error: reason });
   }
 
   cancel(scanId: string): boolean {
@@ -156,7 +254,7 @@ export class ScanManager {
       // Nothing in memory: the task either finished or was never started here.
       const task = this.store.getScan(scanId);
       if (task && (task.status === 'QUEUED' || task.status === 'RUNNING')) {
-        this.store.updateScan(scanId, { status: 'CANCELLED', completedAt: nowIso() });
+        this.store.updateScan(scanId, { status: 'CANCELLED', completedAt: nowIso(), waitingFor: null });
         return true;
       }
       return false;
@@ -202,13 +300,14 @@ export class ScanManager {
     previous: ScanTask | null;
     previousFiles: Map<string, ScanFileRow> | null;
     previousFindings: Map<string, AnalysisFinding[]>;
+    previousFacts: Map<string, FileRefFacts> | null;
     pool: ParsePool | null;
     runner: Runner;
     onProgress: (done: number, currentFile: string | null) => void;
     /** Called as soon as one file is finished, so a cancelled scan can persist progress. */
     onFileReady?: (file: PreparedFile, index: number) => void;
   }): Promise<PreparedFile[]> {
-    const { entries, scan, scanTaskId, config, disabledRuleIds, previous, previousFiles, previousFindings, runner, onProgress, onFileReady } = options;
+    const { entries, scan, scanTaskId, config, disabledRuleIds, previous, previousFiles, previousFindings, previousFacts, runner, onProgress, onFileReady } = options;
     const results: Array<PreparedFile | null> = new Array(entries.length).fill(null);
 
     // The pool is an optimisation, never a requirement: if workers cannot start in this
@@ -267,7 +366,7 @@ export class ScanManager {
             scanTaskId,
           })),
           problems: [],
-          facts: null,
+          facts: previousFacts?.get(entry.relPath) ?? null,
           reused: true,
         };
         onFileReady?.(results[index] as PreparedFile, index);
@@ -424,12 +523,19 @@ export class ScanManager {
     if (!task) {
       this.emit(runner, { scanId, type: 'error', at: nowIso(), error: `Unknown scan ${scanId}` });
       this.runners.delete(scanId);
+      this.store.releaseProjectLock(runner.projectId, runner.lockToken);
       return;
     }
 
     const config = task.configSnapshot;
     const startedAt = nowIso();
-    this.store.updateScan(scanId, { status: 'RUNNING', startedAt, phase: 'FILE_DISCOVERY' });
+    this.store.updateScan(scanId, {
+      status: 'RUNNING',
+      startedAt,
+      phase: 'FILE_DISCOVERY',
+      runnerPid: process.pid,
+      waitingFor: null,
+    });
     this.emit(runner, { scanId, type: 'status', at: startedAt, status: 'RUNNING', phase: 'FILE_DISCOVERY' });
 
     // Project decisions to stop reporting specific patterns are applied at scan time,
@@ -443,13 +549,20 @@ export class ScanManager {
     }
 
     const findings: AnalysisFinding[] = [];
-    const problems: ParseProblem[] = [];
-    const fileRows: ScanFileRow[] = [];
     const facts: FileRefFacts[] = [];
     const reusedPaths = new Set<string>();
+    const analyzableFiles = new Set<string>();
+    let pendingRows: ScanFileRow[] = [];
+    let pendingFindings: AnalysisFinding[] = [];
+    let pendingProblems: ParseProblem[] = [];
+    let pendingFacts: FileRefFacts[] = [];
     let discovery: DiscoveryResult | null = null;
     let parsedCount = 0;
     let failedCount = 0;
+    let persistedFiles = 0;
+    let persistedParsed = 0;
+    let persistedFailed = 0;
+    let persistedFindings = 0;
     let scannedCount = 0;
     let activePhase: ScanPhase = 'FILE_DISCOVERY';
 
@@ -467,9 +580,13 @@ export class ScanManager {
       acceptedIndexes.add(index);
       if (item.status === 'FAILED') failedCount += 1;
       else parsedCount += 1;
-      problems.push(...item.problems);
+      if (item.status === 'PARSED') analyzableFiles.add(item.entry.relPath);
+      pendingProblems.push(...item.problems);
       if (item.reused) reusedPaths.add(item.entry.relPath);
-      if (item.facts) facts.push(item.facts);
+      if (item.facts) {
+        facts.push(item.facts);
+        pendingFacts.push(item.facts);
+      }
 
       const fileFindings = item.findings;
       for (const finding of fileFindings) {
@@ -490,7 +607,8 @@ export class ScanManager {
         }
       }
       findings.push(...fileFindings);
-      fileRows.push({
+      pendingFindings.push(...fileFindings);
+      pendingRows.push({
         id: newId('fil'),
         scanTaskId: scanId,
         path: item.entry.relPath,
@@ -510,6 +628,40 @@ export class ScanManager {
         const item = preparedByIndex.get(index);
         if (item) acceptFile(item, index);
       }
+    };
+
+    const flush = (currentFile: string | null): void => {
+      if (pendingRows.length === 0 && pendingFindings.length === 0 && pendingProblems.length === 0 && pendingFacts.length === 0) {
+        this.store.updateScan(scanId, {
+          scannedFileCount: acceptedIndexes.size,
+          parsedFileCount: parsedCount,
+          failedFileCount: failedCount,
+          findingCount: findings.length,
+          currentFile,
+        });
+        return;
+      }
+      this.store.insertScanBatch(scanId, {
+        files: pendingRows,
+        findings: pendingFindings,
+        problems: pendingProblems,
+        facts: pendingFacts,
+        counts: {
+          scanned: acceptedIndexes.size,
+          parsed: parsedCount,
+          failed: failedCount,
+          findings: findings.length,
+          currentFile,
+        },
+      });
+      persistedFiles += pendingRows.length;
+      persistedParsed += pendingRows.filter((row) => row.parseStatus !== 'FAILED').length;
+      persistedFailed += pendingRows.filter((row) => row.parseStatus === 'FAILED').length;
+      persistedFindings += pendingFindings.length;
+      pendingRows = [];
+      pendingFindings = [];
+      pendingProblems = [];
+      pendingFacts = [];
     };
 
     const setPhase = (phase: ScanPhase): void => {
@@ -597,6 +749,9 @@ export class ScanManager {
       // One query for the whole previous scan instead of one per file: on a 1 400-file
       // project that turns 1 400 round trips into a single read.
       const previousFindings = new Map<string, AnalysisFinding[]>();
+      const previousFacts = previous
+        ? new Map(this.store.listFileFacts(previous.id).map((fact) => [fact.path, fact]))
+        : null;
       if (previous) {
         for (const finding of this.store.listAllFindings(previous.id)) {
           const list = previousFindings.get(finding.filePath) ?? [];
@@ -616,6 +771,8 @@ export class ScanManager {
 
       const pool = createParsePool();
       if (pool) this.log(runner, scanId, 'info', 'PARSING', `Parsing with ${poolSizeFromEnv()} worker(s)`);
+      const flushEvery = flushBatchSize();
+      let readySinceFlush = 0;
       let prepared: PreparedFile[];
       try {
         prepared = await this.prepareFiles({
@@ -627,16 +784,21 @@ export class ScanManager {
           previous,
           previousFiles,
           previousFindings,
+          previousFacts,
           pool,
           runner,
           onProgress: (done: number, currentFile: string | null) => {
             scannedCount = done;
             if (done % 20 === 0 || done === discoveredFiles.length) emitProgress(currentFile);
           },
-          // Buffer, do not accumulate: files finish out of order when a pool is used, and the
-          // final ordering should still follow the discovery order.
           onFileReady: (file: PreparedFile, index: number) => {
             preparedByIndex.set(index, file);
+            acceptFile(file, index);
+            readySinceFlush += 1;
+            if (readySinceFlush >= flushEvery) {
+              readySinceFlush = 0;
+              flush(file.entry.relPath);
+            }
           },
         });
       } finally {
@@ -646,22 +808,92 @@ export class ScanManager {
 
       /* ---------------- apply: reuse notes, ignore rules, rows ---------------- */
       prepared.forEach((item, index) => acceptFile(item, index));
+      flush(null);
+
+      const crossFile = buildCrossFileHandlerFindings(
+        facts.map((fact) => ({ path: fact.path, facts: fact })),
+        scanId,
+      );
+      const suppressedByFile = new Map<string, Set<number>>();
+      for (const item of crossFile.suppressed) {
+        const starts = suppressedByFile.get(item.filePath) ?? new Set<number>();
+        for (const start of item.starts) starts.add(start);
+        suppressedByFile.set(item.filePath, starts);
+      }
+      const supersededHandlers = new Set(crossFile.superseded.map((item) => `${item.filePath}|${item.handlerStart}`));
+      let supersededCount = 0;
+      for (let index = findings.length - 1; index >= 0; index -= 1) {
+        const finding = findings[index];
+        if (finding.ruleId !== 'WL-JS-017') continue;
+        const handlerStart = finding.evidence.detail?.handlerStart;
+        if (typeof handlerStart !== 'number') continue;
+        if (!supersededHandlers.has(`${finding.filePath}|${handlerStart}`)) continue;
+        if (finding.status === 'IGNORED') ignoredCount -= 1;
+        if (this.store.deleteFinding(finding.id)) {
+          this.store.incrementScanFileFindingCount(scanId, finding.filePath, -1);
+        }
+        findings.splice(index, 1);
+        supersededCount += 1;
+      }
+
+      let suppressedCount = 0;
+      for (let index = findings.length - 1; index >= 0; index -= 1) {
+        const finding = findings[index];
+        if (finding.ruleId !== 'WL-JS-003') continue;
+        if (!suppressedByFile.get(finding.filePath)?.has(finding.startOffset)) continue;
+        if (finding.status === 'IGNORED') ignoredCount -= 1;
+        if (this.store.deleteFinding(finding.id)) {
+          this.store.incrementScanFileFindingCount(scanId, finding.filePath, -1);
+        }
+        findings.splice(index, 1);
+        suppressedCount += 1;
+      }
+      for (const finding of crossFile.findings) {
+        const match = findIgnoreMatch(finding, ignoreRules);
+        if (match) {
+          finding.status = 'IGNORED';
+          finding.statusNote = ignoreNote(match.rule, match.reason);
+          finding.statusUpdatedAt = nowIso();
+          ignoredCount += 1;
+        }
+        findings.push(finding);
+        pendingFindings.push(finding);
+        this.store.incrementScanFileFindingCount(scanId, finding.filePath, 1);
+      }
+      if (crossFile.findings.length > 0 || suppressedCount > 0 || supersededCount > 0) {
+        this.log(
+          runner,
+          scanId,
+          'info',
+          'FINDING_MERGE',
+          `${crossFile.findings.length} cross-file handler finding(s); ` +
+            `suppressed ${suppressedCount} covered window.event finding(s); replaced ${supersededCount} per-file handler finding(s)`,
+        );
+      }
 
       /* ---------------- phase 6: references ---------------- */
       setPhase('REFERENCE_ANALYSIS');
       const allPaths = new Set(discovery.files.map((f) => f.relPath));
       const referenceResult = buildRelations(facts, allPaths);
 
-      // Reused files were not parsed, so their outgoing references come from the previous
-      // scan. Targets may have changed, but the source file did not.
       if (previous && reusedPaths.size > 0) {
-        const seen = new Set(referenceResult.relations.map((rel) => `${rel.fromPath}|${rel.toPath}|${rel.kind}`));
-        for (const relation of this.store.listRelations(previous.id)) {
-          if (!reusedPaths.has(relation.fromPath)) continue;
-          const key = `${relation.fromPath}|${relation.toPath}|${relation.kind}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          referenceResult.relations.push(relation);
+        const missingFacts = new Set([...reusedPaths].filter((path) => !previousFacts?.has(path)));
+        if (missingFacts.size > 0) {
+          const seen = new Set(referenceResult.relations.map((rel) => `${rel.fromPath}|${rel.toPath}|${rel.kind}`));
+          for (const relation of this.store.listRelations(previous.id)) {
+            if (!missingFacts.has(relation.fromPath)) continue;
+            const key = `${relation.fromPath}|${relation.toPath}|${relation.kind}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            referenceResult.relations.push(relation);
+          }
+          this.log(
+            runner,
+            scanId,
+            'warn',
+            'REFERENCE_ANALYSIS',
+            `${missingFacts.size} reused file(s) have no stored reference facts; their relations were copied from scan ${previous.id}.`,
+          );
         }
       }
       for (const item of referenceResult.unresolved.slice(0, 50)) {
@@ -684,18 +916,67 @@ export class ScanManager {
 
       /* ---------------- phase 8: persistence ---------------- */
       setPhase('PERSISTENCE');
-      this.store.insertScanFiles(fileRows);
-      this.store.insertFindings(findings);
-      this.store.insertParseProblems(scanId, problems);
+      flush(null);
       this.store.insertRelations(scanId, referenceResult.relations);
       if (reusedPaths.size > 0) {
         this.log(runner, scanId, 'info', 'FINDING_MERGE', `Reused ${reusedPaths.size} unchanged file(s) from ${previous?.id}`);
       }
 
+      const previousList = previous ? [...previousFindings.values()].flat() : [];
+      if (previous) {
+        const outcomes = verifyManualFixes({
+          previous: previousList,
+          current: findings,
+          parsedFiles: analyzableFiles,
+          disabledRules,
+        });
+        const updates: FindingStatusUpdate[] = [];
+        let validated = 0;
+        let failed = 0;
+        for (const outcome of outcomes) {
+          if (outcome.result === 'VALIDATED') {
+            validated += 1;
+            updates.push({
+              id: outcome.previous.id,
+              status: 'VALIDATED',
+              actor: 'system:verification',
+              note: `Not found in scan ${scanId}.`,
+            });
+            continue;
+          }
+          failed += 1;
+          const ignored = outcome.current?.status === 'IGNORED';
+          updates.push({
+            id: outcome.previous.id,
+            status: 'VALIDATION_FAILED',
+            actor: 'system:verification',
+            note: `Still found in scan ${scanId}${ignored ? ' (ignored by a project rule there)' : ''}.`,
+          });
+          if (outcome.current && !ignored) {
+            updates.push({
+              id: outcome.current.id,
+              status: 'VALIDATION_FAILED',
+              actor: 'system:verification',
+              note: `Previously marked fixed in scan ${previous.id}, still found.`,
+            });
+          }
+        }
+        this.store.applyStatusUpdates(updates);
+        if (outcomes.length > 0) {
+          this.log(
+            runner,
+            scanId,
+            'info',
+            'PERSISTENCE',
+            `Manual fix verification against scan ${previous.id}: ${validated} validated, ${failed} failed`,
+          );
+        }
+      }
+
       // How much moved since the previous scan. The same comparison the Compare page runs on
       // demand is recorded here, so a trend is available without recomputing it per page view —
       // and so "fixed 12, introduced 3" survives the next scan overwriting the numbers.
-      const delta = previous ? compareFindings([...previousFindings.values()].flat(), findings) : null;
+      const delta = previous ? compareFindings(previousList, findings) : null;
       if (delta) {
         this.log(
           runner,
@@ -706,7 +987,7 @@ export class ScanManager {
         );
       }
       this.store.updateScan(scanId, {
-        scannedFileCount: scannedCount,
+        scannedFileCount: acceptedIndexes.size,
         parsedFileCount: parsedCount,
         failedFileCount: failedCount,
         findingCount: findings.length,
@@ -754,9 +1035,7 @@ export class ScanManager {
         // Keep whatever was analyzed so far; never leave the task in RUNNING.
         try {
           drainPrepared();
-          if (fileRows.length) this.store.insertScanFiles(fileRows);
-          if (findings.length) this.store.insertFindings(findings);
-          if (problems.length) this.store.insertParseProblems(scanId, problems);
+          flush(null);
         } catch {
           // Persisting partial results must not mask the cancellation.
         }
@@ -767,10 +1046,10 @@ export class ScanManager {
           // Kept on purpose: "stopped during parsing" is the only useful answer to
           // "where did it stop", and it is what the phase list renders.
           phase: activePhase,
-          scannedFileCount: scannedCount,
-          parsedFileCount: parsedCount,
-          failedFileCount: failedCount,
-          findingCount: findings.length,
+          scannedFileCount: persistedFiles,
+          parsedFileCount: persistedParsed,
+          failedFileCount: persistedFailed,
+          findingCount: persistedFindings,
           currentFile: null,
           logJson: JSON.stringify(runner.log),
         });
@@ -783,9 +1062,7 @@ export class ScanManager {
         // resume rather than a restart.
         try {
           drainPrepared();
-          if (fileRows.length) this.store.insertScanFiles(fileRows);
-          if (findings.length) this.store.insertFindings(findings);
-          if (problems.length) this.store.insertParseProblems(scanId, problems);
+          flush(null);
         } catch {
           // Persisting partial results must not mask the original failure.
         }
@@ -795,10 +1072,10 @@ export class ScanManager {
           completedAt,
           phase: activePhase,
           errorSummary: message,
-          scannedFileCount: scannedCount,
-          parsedFileCount: parsedCount,
-          failedFileCount: failedCount,
-          findingCount: findings.length,
+          scannedFileCount: persistedFiles,
+          parsedFileCount: persistedParsed,
+          failedFileCount: persistedFailed,
+          findingCount: persistedFindings,
           currentFile: null,
           logJson: JSON.stringify(runner.log),
         });
@@ -807,6 +1084,7 @@ export class ScanManager {
       }
     } finally {
       this.runners.delete(scanId);
+      this.store.releaseProjectLock(runner.projectId, runner.lockToken);
     }
   }
 }

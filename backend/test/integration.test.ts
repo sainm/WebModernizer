@@ -161,7 +161,7 @@ describe('end-to-end scan of the legacy example project', () => {
     expect(validation.findingsStillPresent).toBe(0);
     expect(validation.passed).toBe(true);
 
-    const rollback = service.rollback(result.executions[0].id);
+    const rollback = await service.rollback(result.executions[0].id);
     expect(rollback.ok).toBe(true);
     expect(readFileSync(join(projectCopy, 'js/legacy-events.js'), 'utf8')).toBe(original);
     expect(store.getMigration(result.executions[0].id)?.executionStatus).toBe('ROLLED_BACK');

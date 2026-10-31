@@ -2,7 +2,7 @@ import { closeSync, existsSync, lstatSync, openSync, readSync, readdirSync, real
 import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ProjectConfig } from '../model/types.js';
 import { LANGUAGE_BY_EXTENSION } from '../model/types.js';
-import { DEFAULT_ENCODINGS } from './textDecode.js';
+import { DEFAULT_ENCODINGS, detectBom } from './textDecode.js';
 
 export const DEFAULT_EXCLUDED_DIRS = [
   '.git',
@@ -79,6 +79,8 @@ function toPosix(path: string): string {
 }
 
 function isProbablyBinary(buffer: Buffer): boolean {
+  const bom = detectBom(buffer);
+  if (bom && (bom.encoding === 'utf-16le' || bom.encoding === 'utf-16be')) return false;
   const limit = Math.min(buffer.length, 8192);
   for (let i = 0; i < limit; i += 1) {
     if (buffer[i] === 0) return true;

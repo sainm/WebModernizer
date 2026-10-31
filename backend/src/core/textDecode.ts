@@ -10,6 +10,9 @@
  * list; see docs/TECH-VALIDATION.md for the rationale and how to override it.
  */
 
+import Encoding from 'encoding-japanese';
+import iconv from 'iconv-lite';
+
 export const DEFAULT_ENCODINGS = ['utf-8', 'shift_jis', 'euc-jp', 'iso-2022-jp', 'utf-16le', 'utf-16be'] as const;
 
 export type DefaultEncoding = (typeof DEFAULT_ENCODINGS)[number];
@@ -34,7 +37,7 @@ const BOMS: Array<{ bytes: number[]; encoding: string }> = [
   { bytes: [0xfe, 0xff], encoding: 'utf-16be' },
 ];
 
-function detectBom(buffer: Buffer): { encoding: string; length: number } | null {
+export function detectBom(buffer: Buffer): { encoding: string; length: number } | null {
   for (const bom of BOMS) {
     if (buffer.length < bom.bytes.length) continue;
     if (bom.bytes.every((byte, i) => buffer[i] === byte)) {
@@ -55,7 +58,7 @@ function detectDeclaredCharset(buffer: Buffer): string | null {
   return meta ? meta[1].toLowerCase() : null;
 }
 
-function normalizeEncoding(name: string): string {
+export function normalizeEncoding(name: string): string {
   const n = name.toLowerCase().replace(/[_\s]/g, '-');
   if (n === 'utf8') return 'utf-8';
   if (n === 'sjis' || n === 'shift-jis' || n === 'x-sjis' || n === 'ms-kanji' || n === 'windows-31j' || n === 'cp932') {
@@ -76,6 +79,80 @@ export function isSupportedEncoding(name: string): boolean {
   } catch {
     return false;
   }
+}
+
+const ICONV_ENCODINGS: Record<string, string> = {
+  'utf-8': 'utf8',
+  shift_jis: 'cp932',
+  'euc-jp': 'euc-jp',
+  'utf-16le': 'utf16-le',
+  'utf-16be': 'utf16-be',
+};
+
+function iconvName(encoding: string): string {
+  return ICONV_ENCODINGS[encoding] ?? encoding;
+}
+
+export function canEncodeEncoding(name: string): boolean {
+  const encoding = normalizeEncoding(name);
+  if (encoding === 'iso-2022-jp') return true;
+  return iconv.encodingExists(iconvName(encoding));
+}
+
+export type EncodeResult = { ok: true; bytes: Buffer } | { ok: false; reason: string };
+
+function firstDifference(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length);
+  for (let i = 0; i < limit; i += 1) {
+    if (a[i] !== b[i]) return i;
+  }
+  return limit;
+}
+
+function codePointAtBoundary(text: string, index: number): number {
+  const code = text.codePointAt(index) ?? 0;
+  if (code >= 0xdc00 && code <= 0xdfff && index > 0) return text.codePointAt(index - 1) ?? code;
+  return code;
+}
+
+export function encodeText(text: string, name: string): EncodeResult {
+  const encoding = normalizeEncoding(name);
+  let bytes: Buffer;
+  try {
+    if (encoding === 'iso-2022-jp') {
+      bytes = Buffer.from(
+        Encoding.convert(text, { to: 'JIS', from: 'UNICODE', type: 'array', fallback: 'error' }),
+      );
+    } else {
+      if (!iconv.encodingExists(iconvName(encoding))) {
+        return {
+          ok: false,
+          reason: `No encoder is available for ${name}, so the file cannot be written back in its own encoding.`,
+        };
+      }
+      bytes = iconv.encode(text, iconvName(encoding));
+    }
+  } catch (err) {
+    return { ok: false, reason: `The rewritten text cannot be encoded as ${name}: ${(err as Error).message}` };
+  }
+
+  let decoded: string;
+  try {
+    decoded = new TextDecoder(encoding, { fatal: true }).decode(bytes);
+  } catch (err) {
+    return { ok: false, reason: `The rewritten text produced invalid ${name} bytes: ${(err as Error).message}` };
+  }
+  if (decoded === text) return { ok: true, bytes };
+
+  const at = firstDifference(text, decoded);
+  const codePoint = codePointAtBoundary(text, at);
+  const label = at >= text.length ? 'end of text' : `U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}`;
+  return {
+    ok: false,
+    reason:
+      `The rewritten text does not survive a round trip through ${name} (first difference at character ${at}, ${label}); ` +
+      'the edit was not applied.',
+  };
 }
 
 function decodeWith(buffer: Buffer, encoding: string, fatal: boolean): string {

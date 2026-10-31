@@ -4,8 +4,8 @@ import type { Locale } from './i18n';
  * One-line finding messages, keyed by the `messageKey` the analyzer emits.
  *
  * Only the summary line is translated: it is what every list shows. The long-form
- * risk analysis and the recommendation stay English on purpose — translating 37
- * rule essays into three languages would be a content project, and half-translated
+ * risk analysis and the recommendation stay English on purpose — translating every
+ * rule essay into three languages would be a content project, and half-translated
  * technical prose is worse than consistent English.
  *
  * English is intentionally absent: the backend message is already English and is
@@ -37,6 +37,14 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-DOM-004': '调用了已废弃的 document.execCommand("{command}")',
     'rules.WL-BEH-002': '通过 navigator.appName 判断浏览器',
     'rules.WL-BEH-001': '通过 UA 字符串嗅探 IE 版本',
+    'rules.WL-DOM-005': '使用了 IE 专有的 {objectText}.runtimeStyle',
+    'rules.WL-DOM-006': '调用了 IE 专有的 document.createStyleSheet()',
+    'rules.WL-DOM-007': '调用了 IE 专有的 {objectText}.{method}()',
+    'rules.WL-DOM-008': '读取了 IE 专有的 {objectName}.{api}',
+    'rules.WL-DOM-009': '使用了 IE 专有的 document.frames',
+    'rules.WL-DOM-010': '调用了 IE 专有的 document.recalc()',
+    'rules.WL-BEH-003': '调用了已移除的 window.showHelp()',
+    'rules.WL-BEH-004': '调用了已移除的 window.createPopup()',
     'rules.WL-HTML-001.assets': '条件注释块中包含脚本或样式资源',
     'rules.WL-HTML-001.plain': '包含 IE 条件注释块',
     'rules.WL-HTML-002': '使用了遗留标签 <{tag}>',
@@ -60,6 +68,18 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-DYN-003': '通过 {api} 执行字符串代码',
     'rules.WL-JSP-001': '{container} 中的服务端代码使该代码块只能部分分析',
     'rules.WL-JSP-002': '<{tag} {attribute}> 的目标由服务端代码生成',
+    'rules.WL-HTML-010': '使用了 IE 专有的 onpropertychange 属性',
+    'rules.WL-DOM-011.propertyName': '读取了 IE 专有的 {objectName}.propertyName',
+    'rules.WL-DOM-011.onpropertychange': '使用了 IE 专有的 {objectText}.onpropertychange',
+    'rules.WL-DOM-012': '调用了 IE 专有的 {objectText}.{method}()',
+    'rules.WL-DOM-013': '使用了 IE 专有的 document.namespaces',
+    'rules.WL-DOM-014': '读取了 IE 专有的 {objectText}.styleSheet',
+    'rules.WL-BEH-005': '使用了 IE 专有的 window.offscreenBuffering',
+    'rules.WL-JS-017': 'IE 事件处理器 {handler} 使用了 window.event（{windowEventCount} 处）',
+    'rules.WL-JS-017.crossFile': 'IE 事件处理器 {handler} 在 {registrationFile} 中注册，并使用了 window.event（{windowEventCount} 处）',
+    'rules.WL-JS-017.inline': 'IE 事件处理器 {handler} 使用了 window.event（{windowEventCount} 处；内联调用 {inlineCallCount} 次）',
+    'rules.WL-JS-017.inlineCalls': 'IE 事件处理器 {handler} 被 {inlineCallCount} 处内联处理器调用，并使用 window.event',
+    'rules.WL-JS-017.inlineCallSite': '内联 {attribute} 处理器调用 {handler}(...) 时未传入 event',
   },
   ja: {
     'rules.WL-JS-001': 'IE 専用の attachEvent("{eventName}", ...) でイベントを登録しています',
@@ -84,6 +104,14 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-DOM-004': '廃止された document.execCommand("{command}") を呼び出しています',
     'rules.WL-BEH-002': 'navigator.appName でブラウザを判定しています',
     'rules.WL-BEH-001': 'User-Agent 文字列で IE を判定しています',
+    'rules.WL-DOM-005': 'IE 専用の {objectText}.runtimeStyle を使用しています',
+    'rules.WL-DOM-006': 'IE 専用の document.createStyleSheet() を呼び出しています',
+    'rules.WL-DOM-007': 'IE 専用の {objectText}.{method}() を呼び出しています',
+    'rules.WL-DOM-008': 'IE 専用の {objectName}.{api} を参照しています',
+    'rules.WL-DOM-009': 'IE 専用の document.frames を使用しています',
+    'rules.WL-DOM-010': 'IE 専用の document.recalc() を呼び出しています',
+    'rules.WL-BEH-003': '廃止された window.showHelp() を呼び出しています',
+    'rules.WL-BEH-004': '廃止された window.createPopup() を呼び出しています',
     'rules.WL-HTML-001.assets': '条件付きコメント内でスクリプトまたはスタイルを読み込んでいます',
     'rules.WL-HTML-001.plain': 'IE 条件付きコメントを含んでいます',
     'rules.WL-HTML-002': 'レガシーな要素 <{tag}> を使用しています',
@@ -107,6 +135,18 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-DYN-003': '{api} で文字列コードを実行しています',
     'rules.WL-JSP-001': '{container} 内のサーバーサイドコードにより、このブロックは部分的にしか解析できません',
     'rules.WL-JSP-002': '<{tag} {attribute}> の参照先がサーバーサイドで生成されています',
+    'rules.WL-HTML-010': 'IE 専用の onpropertychange 属性を使用しています',
+    'rules.WL-DOM-011.propertyName': 'IE 専用の {objectName}.propertyName を参照しています',
+    'rules.WL-DOM-011.onpropertychange': 'IE 専用の {objectText}.onpropertychange を使用しています',
+    'rules.WL-DOM-012': 'IE 専用の {objectText}.{method}() を呼び出しています',
+    'rules.WL-DOM-013': 'IE 専用の document.namespaces を使用しています',
+    'rules.WL-DOM-014': 'IE 専用の {objectText}.styleSheet を参照しています',
+    'rules.WL-BEH-005': 'IE 専用の window.offscreenBuffering を使用しています',
+    'rules.WL-JS-017': 'IE イベントハンドラ {handler} が window.event を使用しています（{windowEventCount} 箇所）',
+    'rules.WL-JS-017.crossFile': 'IE イベントハンドラ {handler} は {registrationFile} で登録され、window.event を使用しています（{windowEventCount} 箇所）',
+    'rules.WL-JS-017.inline': 'IE イベントハンドラ {handler} が window.event を使用しています（{windowEventCount} 箇所、インライン呼び出し {inlineCallCount} 回）',
+    'rules.WL-JS-017.inlineCalls': 'IE イベントハンドラ {handler} は {inlineCallCount} 箇所のインラインハンドラから呼ばれ、window.event を使用しています',
+    'rules.WL-JS-017.inlineCallSite': 'インライン {attribute} ハンドラが {handler}(...) を event 引数なしで呼び出しています',
   },
 };
 

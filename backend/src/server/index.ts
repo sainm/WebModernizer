@@ -420,7 +420,7 @@ export function createServer(store: Store): ServerContext {
       const config = body?.config ? normalizeConfig(body.config) : normalizeConfig(project.config);
       const scan = store.createScan(project, config, ruleSignature());
       scans.start(scan.id);
-      res.status(202).json(scan);
+      res.status(202).json(store.getScan(scan.id) ?? scan);
     }),
   );
 
@@ -737,6 +737,7 @@ export function createServer(store: Store): ServerContext {
       'READY_FOR_MIGRATION',
       'MIGRATED',
       'REVIEW_REQUIRED',
+      'FIXED_IN_CODE',
       'VALIDATED',
       'VALIDATION_FAILED',
       'IGNORED',
@@ -846,23 +847,32 @@ export function createServer(store: Store): ServerContext {
     }),
   );
 
-  app.post('/api/migrations/:id/rollback', (req, res) => {
-    // Rolling back a single row of a batch restores the whole file, so the response
-    // reports how many findings were reverted.
-    const result = migrations.rollback(req.params.id);
-    res.status(result.ok ? 200 : 409).json(result);
-  });
+  app.post(
+    '/api/migrations/:id/rollback',
+    asyncHandler(async (req, res) => {
+      // Rolling back a single row of a batch restores the whole file, so the response
+      // reports how many findings were reverted.
+      const result = await migrations.rollback(req.params.id);
+      res.status(result.ok ? 200 : 409).json(result);
+    }),
+  );
 
-  app.post('/api/migrations/batch/:batchId/rollback', (req, res) => {
-    const result = migrations.rollbackBatch(req.params.batchId);
-    res.status(result.ok ? 200 : 409).json(result);
-  });
+  app.post(
+    '/api/migrations/batch/:batchId/rollback',
+    asyncHandler(async (req, res) => {
+      const result = await migrations.rollbackBatch(req.params.batchId);
+      res.status(result.ok ? 200 : 409).json(result);
+    }),
+  );
 
   // A session is one execute() call, so this reverts every file that call touched.
-  app.post('/api/migrations/session/:sessionId/rollback', (req, res) => {
-    const result = migrations.rollbackSession(req.params.sessionId);
-    res.status(result.ok ? 200 : 409).json(result);
-  });
+  app.post(
+    '/api/migrations/session/:sessionId/rollback',
+    asyncHandler(async (req, res) => {
+      const result = await migrations.rollbackSession(req.params.sessionId);
+      res.status(result.ok ? 200 : 409).json(result);
+    }),
+  );
 
   app.get('/api/migrations', (req, res) => {
     const scanTaskId = typeof req.query.scanTaskId === 'string' ? req.query.scanTaskId : undefined;

@@ -33,6 +33,7 @@ const STATUSES: FindingStatus[] = [
   'READY_FOR_MIGRATION',
   'MIGRATED',
   'REVIEW_REQUIRED',
+  'FIXED_IN_CODE',
   'VALIDATED',
   'VALIDATION_FAILED',
   'IGNORED',
@@ -443,7 +444,10 @@ export default function Findings() {
                 ) : null}
                 {Object.entries(current.evidence.detail ?? {})
                   // touchesDynamicRegion is already surfaced as a badge above.
-                  .filter(([key, value]) => key !== 'touchesDynamicRegion' && value !== null && value !== '')
+                  .filter(
+                    ([key, value]) =>
+                      key !== 'touchesDynamicRegion' && key !== 'companionFindingIds' && value !== null && value !== '',
+                  )
                   .slice(0, 8)
                   .map(([key, value]) => (
                     <div key={key} style={{ display: 'contents' }}>
@@ -528,6 +532,11 @@ export default function Findings() {
                 <button className="btn small" onClick={() => setStatus('REVIEW_REQUIRED')}>
                   {t('findings.markReview')}
                 </button>
+                {current.status !== 'IGNORED' && current.status !== 'FIXED_IN_CODE' ? (
+                  <button className="btn small" onClick={() => setStatus('FIXED_IN_CODE')}>
+                    {t('findings.markFixed')}
+                  </button>
+                ) : null}
                 <button className="btn small danger" onClick={() => setIgnoreOpen(true)}>
                   {t('findings.ignore')}
                 </button>
@@ -559,6 +568,11 @@ export default function Findings() {
                   </button>
                 ) : null}
               </div>
+              {current.status === 'FIXED_IN_CODE' ? (
+                <div className="callout" style={{ marginTop: 8, fontSize: 11.5 }}>
+                  {t('findings.fixedHint')}
+                </div>
+              ) : null}
             </div>
 
             {ruleCreated ? (

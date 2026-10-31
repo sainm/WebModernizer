@@ -1045,3 +1045,513 @@ One HTTP test: two completed scans produce two points, oldest first, every point
 sums to the finding count the scan recorded, and no point carries a non-terminal status.
 
 Suite: 183 tests.
+
+---
+
+## 27. Twenty-third increment — writing legacy encodings back
+
+The tool could scan Shift_JIS / EUC-JP / ISO-2022-JP / UTF-16 files but refused to write them:
+"convert the file to UTF-8 first". For the projects this tool targets, that made a whole class of
+files read-only. This increment removes the refusal without letting a lossy rewrite land.
+
+**Two codecs, each verified before committing to it.** iconv-lite 0.7.3 (MIT) covers UTF-8,
+Windows-31J, EUC-JP and UTF-16. It has no ISO-2022-JP codec — probed directly:
+`encodingExists('iso-2022-jp') === false` — so ISO-2022-JP uses encoding-japanese 2.4.0
+(MIT, zero dependencies). Both round-trip the fixture's Japanese comment. Shift_JIS is encoded as
+Windows-31J (`cp932`) because that is the mapping the WHATWG decoder behind
+`TextDecoder('shift_jis')` actually uses.
+
+**The safety gate is a strict round trip.** `encodeText` encodes the edited text, decodes the bytes
+back with `fatal: true`, and compares. A difference — an unrepresentable character, a lone
+surrogate, a lossy mapping — blocks the finding and reports the character offset. iconv-lite's
+silent `?` substitution therefore cannot reach the disk. The gate is applied at preview (per
+finding, so one impossible edit does not poison the rest of the plan) and again before the write.
+
+**The write path carries bytes, not a string.** The byte-order mark is taken from the original file
+and re-emitted unchanged, and `after_hash` is computed over the bytes that will land. Rollback
+compares like with like; a hash computed over a UTF-8 rendering of the text would have marked every
+non-UTF-8 migration as drifted.
+
+**A discovery bug this exposed.** The binary probe treats any NUL byte as binary, and UTF-16 text is
+full of them by construction. A file with a UTF-16 BOM is now exempt from that rule; UTF-32 remains
+unsupported and stays classified as binary. Without this, the UTF-16 decoder was documented but
+unreachable.
+
+**Tests.** `encodingSafety.test.ts` grew from 3 to 9 cases: a migration + rollback for each of
+Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16LE, UTF-16BE and UTF-8-with-BOM; unrepresentable-character
+refusal; and the no-encoder path. Each migration case asserts that the written bytes still decode to
+the expected edited text, the Japanese comment survives, no U+FFFD appears, CRLF is intact, the BOM
+is byte-identical, and `afterHash` equals the file's actual SHA-256.
+
+**End-to-end on the fixture.** `js/shift-jis-helper.js` (Shift_JIS, 462 bytes, `attachEvent` at
+line 7 column 5) was previewed, executed and rolled back. The file became 465 bytes, still decoded
+as Shift_JIS, the Japanese header/comment/label were unchanged, and rollback restored the original
+SHA-256. The migration preview now also labels each item with the encoding it will preserve in the
+UI (zh/ja/en).
+
+**Remaining limits.** ISO-2022-JP is stateful, so the encoder may choose different escape sequences
+than the source even when the decoded text is identical; the diff is the place to confirm that. A
+forced encoding with no available encoder is still scan-only. GBK/GB18030 remain outside the
+default detection list.
+
+Suite: 189 tests.
+
+---
+
+## 28. Twenty-fourth increment — a scan that survives SIGKILL
+
+Until now a scan wrote its rows only when it stopped. A cancelled scan persisted what it had, but a
+hard kill (`SIGKILL`, power loss) lost every file and left the row `RUNNING` forever, so the UI kept
+spinning and the next scan started from zero.
+
+**Batches land atomically.** Completed files are committed every 25 files
+(`WEBLIFT_SCAN_FLUSH_EVERY` for deliberate overrides). One transaction writes findings, parse
+problems, per-file reference facts and the file rows, updates the scan's counts, and commits. The
+file row is last inside the transaction; together with the transaction it is the marker that the
+rest of that file's data is present. `scanRecovery.test.ts` forces a duplicate file id and asserts
+that the finding and fact rows inserted earlier in the same batch are rolled back.
+
+**The mutation check caught a false green in the test itself.** The first version of the mid-run
+test wrapped `insertScanFiles` and accepted any flush while the status was `RUNNING`. Disabling the
+periodic flush still passed, because the final persistence phase also runs before the status becomes
+`COMPLETED`. The probe now requires `phase === 'PARSING'`; with the periodic flush disabled the test
+fails at that assertion.
+
+**A dead owner is reclaimed.** Each run records `runner_pid`. Constructing `ScanManager` marks any
+`RUNNING` row whose PID is not alive (or is absent) as `FAILED` with an explanatory `errorSummary`;
+a live PID — including the current process — is left alone. `FAILED` was already a valid
+incremental-reuse source, so the next scan reuses the committed prefix by hash + rule signature and
+parses the rest.
+
+**Reference facts are persisted per file.** Reused files are not parsed, so their outgoing edges used
+to be copied from the previous scan. A hard-killed scan had no relations at all. The new `file_fact`
+table stores `FileRefFacts` per file; reused facts are loaded and `buildRelations` runs over the
+whole project, so a resumed scan rebuilds its edges instead of inheriting a partial copy. Scans from
+before this table have no facts; for those, the old relation copy remains as a logged fallback.
+
+**Measured end-to-end.** A child process scanned 1 000 files with a 10-file flush cadence, announced
+30 committed rows, and was killed with `SIGKILL`. Reopening the data directory showed the scan
+`RUNNING` with 30 rows. A new `ScanManager` reclaimed it to `FAILED`
+("The scan process stopped before completion..."), and a new scan completed: 1 000 files, 30 reused,
+970 parsed, 1 000 findings and 1 000 fact rows. No finding was lost.
+
+**Remaining limits.** Two processes scanning the same project are still uncoordinated; the PID
+check protects a live owner but cannot rule out PID reuse. The last uncommitted files are re-parsed.
+Files whose previous scan predates `file_fact` fall back to copied relations and log a warning.
+
+Suite: 193 tests.
+
+---
+
+## 29. Twenty-fifth increment — a manual fix that has to prove itself
+
+A migration sets `MIGRATED` from its execution record, but a fix made by hand had no result: the
+finding stayed in whatever state it was in, and the next scan created a new row with no connection
+to the claim. `REVIEW_REQUIRED` and `IGNORED` describe intent; neither proves the code changed.
+
+**A new claim state.** `FIXED_IN_CODE` means "the code has been changed; verify it on the next
+scan". The finding detail offers a one-click action, the API accepts the status, and the badge and
+hint are translated in zh/ja/en.
+
+**The matcher is deliberate about identity and evidence.** `verifyManualFixes` is a pure function.
+It matches previous and current findings one-for-one on `findingKey` (rule + file +
+whitespace-normalised snippet): line shifts must not break a claim, and duplicate snippets must not
+let one surviving occurrence vouch for another. It only draws conclusions for files whose current
+row is `PARSED` — a skipped, binary or partially parsed file cannot prove absence — and it skips
+rules disabled in the current scan.
+
+Four outcomes:
+- `FIXED_IN_CODE` and absent → the claim becomes `VALIDATED`.
+- `FIXED_IN_CODE` and present → the claim and the current occurrence both become
+  `VALIDATION_FAILED` (the current one is left alone if a project rule ignores it).
+- `VALIDATION_FAILED` and absent → `VALIDATED`, so a failed fix resolves automatically once the
+  code is repaired; the user does not have to re-mark it.
+- `VALIDATION_FAILED` and present → no new history row.
+
+Status updates run in one transaction and append `finding_status_history` rows with actor
+`system:verification` and a note naming the scan that decided.
+
+**Tests and mutation checks.** Seven unit cases cover the matcher; two three-scan integration cases
+cover claim → failure → repair → validation and claim → repair → validation. Disabling the
+`FIXED_IN_CODE` branch turned both integration tests red; removing the parsed-file guard turned the
+conservative-case test red.
+
+**Demonstrated end to end.** `legacy.js` was marked fixed, repaired, and the next scan marked the
+claim `VALIDATED`. `pending.js` was marked fixed but left broken; the next scan marked both the
+claim and the current occurrence `VALIDATION_FAILED`. The finding history shows the user claim and
+the `system:verification` decision. In a headless browser the "Mark fixed in code" action changed
+the status through the real API and rendered the badge and the verification hint.
+
+Suite: 202 tests.
+
+---
+
+## 30. Twenty-sixth increment — the removed APIs that were invisible
+
+The rule set covered the specification's list but not several APIs that legacy code uses and Chrome
+removed. A project could contain `element.runtimeStyle`, `document.createStyleSheet`,
+`element.setCapture`, `event.toElement`, `document.frames`, `document.recalc`, `window.showHelp` or
+`window.createPopup` and receive a clean scan.
+
+**Eight detection-only rules.** They are `MANUAL` or `UNSUPPORTED`, not fabricated `SAFE`/
+`CONDITIONAL`: no recipe exists for these shapes, and the existing automation-level gate already
+refuses to claim one.
+
+| Rule | API | Level |
+| --- | --- | --- |
+| WL-DOM-005 | `element.runtimeStyle` | MANUAL |
+| WL-DOM-006 | `document.createStyleSheet` | MANUAL |
+| WL-DOM-007 | `element.setCapture` / `releaseCapture` | MANUAL |
+| WL-DOM-008 | `event.toElement` / `fromElement` | MANUAL |
+| WL-DOM-009 | `document.frames` | MANUAL |
+| WL-DOM-010 | `document.recalc` | MANUAL |
+| WL-BEH-003 | `window.showHelp` | UNSUPPORTED |
+| WL-BEH-004 | `window.createPopup` | UNSUPPORTED |
+
+**False-positive guards are part of each detector.** `document.*` APIs require the `document`
+identifier, not any object; `showHelp` and `createPopup` require `window.` or the bare IE global;
+`toElement`/`fromElement` require a parameter named like an event on the enclosing function.
+Comments and string literals cannot produce findings because the detectors walk the AST.
+
+**Tests.** One firing fixture per rule (the coverage suite asserts set equality), metadata and
+zh/ja messages, plus a dedicated test for the second variant (`releaseCapture`, `fromElement`, bare
+`showHelp`/`createPopup`) and for lookalikes (`obj.toElement`, `custom.showHelp`, `window.frames`).
+
+**Verification.** A synthetic project with ten occurrences across the eight rules produced ten
+findings (eight MANUAL, two UNSUPPORTED) and zero findings from the comment/string decoys. The
+bundled fixture stayed at 12 files / 99 findings / 22 auto-convertible, so the new detectors did not
+drift the baseline.
+
+**A stale generator was caught.** `scripts/gen-rules-doc.mjs` imports `backend/dist`, so running it
+before a rebuild produced a 42-rule document after the registry had 50. `ruleDoc.test.ts` now
+compares `docs/RULES.md` with the source registry, so a stale document fails the suite.
+Regenerate with `npm run build:api && node scripts/gen-rules-doc.mjs`.
+
+Suite: 207 tests.
+
+---
+
+## 31. Twenty-seventh increment — one writer per project, across processes
+
+Scans and migrations were only serialized inside one process. Two processes against the same data
+directory could interleave: a migration's write-ahead claim would surface damage rather than prevent
+it, and a scan could read a mixed snapshot while another process wrote project files.
+
+**A database lock keyed by project.** `project_lock(project_id PRIMARY KEY, owner_pid, owner_token,
+acquired_at)`. Acquisition runs under `BEGIN IMMEDIATE`, so two processes cannot both insert. A lock
+is re-entrant for the same token, refused for a live different owner — even when the pid is the same
+— and reclaimed when the owner pid is gone. Ownership is per operation token, not per process, so a
+scan and a migration in one process cannot overlap either. SQLite `busy_timeout` is 5 s so a
+concurrent write transaction settles instead of failing immediately.
+
+**Every writer takes it and every exit releases it.** A scan acquires at start and releases in the
+run's `finally` (including the unknown-task early return). A busy scan is marked `FAILED` with the
+owner pid and acquisition time; the start endpoint returns that scan, so the UI shows the reason
+instead of an unhandled rejection. A migration acquires inside the in-process queue and releases in
+a `finally`; a rollback acquires in `rollbackRows` and releases there too. A migration or rollback
+that finds a lock returns the same reason and writes nothing.
+
+**Tests and mutation checks.** Three store-level cases (two connections contend, the same token
+re-enters, a dead pid is reclaimed) and two integration cases (a scan is blocked then succeeds after
+release; migration and rollback are blocked, the file bytes stay unchanged, then both succeed).
+Disabling the scan, migration or rollback acquisition each turned its test red.
+
+**Two-process verification.** A child process acquired the lock (pid 51067) and the parent's scan was
+rejected with "Another operation is already running on this project (pid 51067, since ...)". After
+`SIGKILL`, the next scan reclaimed the dead lock, completed with one finding, and the lock table was
+empty.
+
+**Remaining limits.** The lock is fail-fast, not a queue; a live but hung owner holds it until it is
+stopped, and PID reuse could mistake a stale lock for a live owner. It coordinates this tool's scans
+and migrations, not arbitrary external writers.
+
+Suite: 212 tests.
+
+---
+
+## 32. Twenty-eighth increment — waiting instead of failing fast
+
+The project lock rejected a second operation immediately. A CLI scan started while the UI was in the
+middle of a migration failed without doing any work, even though the owner was going to finish in a
+few seconds.
+
+**A bounded wait, not a queue tax.** `acquireProjectLock` tries the atomic acquisition, then polls
+every 200 ms up to `WEBLIFT_LOCK_WAIT_MS` (default 30 s). The try-acquire itself is unchanged: one
+`BEGIN IMMEDIATE`, same-token re-entry, dead-pid reclaim. A waiter that reaches the deadline gets
+the same owner details as before, prefixed with the elapsed time.
+
+**Scans stay `QUEUED` with a reason.** When the first try finds a live owner, the scan keeps its
+`QUEUED` status and records `waitingFor` (owner pid + acquisition time). `ScanTask` gained the
+field, the scanner writes it while waiting, and the scan page shows a warning callout next to the
+`QUEUED · LIVE` badge. The waiter polls, acquires when the owner releases, clears `waitingFor`, and
+runs. A timeout marks the scan `FAILED` with "Timed out after Ns..."; cancel while waiting marks it
+`CANCELLED` without taking the lock. A queued scan whose waiting process dies is reclaimed by
+`markInterruptedScans` (the query now covers `QUEUED` rows with a `runner_pid`, while rows that were
+never started stay untouched).
+
+**Migrations and rollbacks wait too.** `execute` waits inside the in-process queue and appends
+"Waited Ns..." to the result warnings; the rollback methods became asynchronous and wait in
+`rollbackRows`, so the API handlers await them. A timeout writes nothing. A rollback during an
+in-process migration still refuses immediately: that is the existing `mutationInFlight` guard, not
+the cross-process lock.
+
+**Tests and mutation checks.** Seven queue tests: scan waits then completes, scan timeout, cancel
+while waiting, migration wait with a warning, migration timeout with no writes, rollback wait, and
+reclaiming a queued scan whose process died. Existing fail-fast lock tests construct the manager
+and service with `lockWaitMs: 0`. Disabling the poll loop turned the scan/migration/rollback wait
+tests red.
+
+**Two-process and UI verification.** A child process held the lock (pid 67058). `POST
+/api/projects/:id/scans` returned 202 with a `QUEUED` scan whose `waitingFor` named the owner. The
+scan page rendered the waiting callout. After `SIGKILL`, the waiting scan acquired the dead owner's
+lock, completed with one finding, cleared `waitingFor`, and left the lock table empty.
+
+Suite: 219 tests.
+
+---
+
+## 33. Twenty-ninth increment — the remaining blind spots
+
+Six more IE-only APIs were invisible to the scanner. All six are detection-only; no recipe was
+invented for a shape that cannot be rewritten mechanically.
+
+| Rule | API | Level |
+| --- | --- | --- |
+| WL-HTML-010 | `onpropertychange` attribute | MANUAL |
+| WL-DOM-011 | `event.propertyName` / `.onpropertychange` | MANUAL |
+| WL-DOM-012 | `element.addBehavior` / `removeBehavior` | UNSUPPORTED |
+| WL-DOM-013 | `document.namespaces` | UNSUPPORTED |
+| WL-DOM-014 | `element.styleSheet` | MANUAL |
+| WL-BEH-005 | `window.offscreenBuffering` | MANUAL |
+
+**Guards that keep them from over-matching.** `propertyName` is only matched on an event-named
+parameter of the enclosing function; `document.namespaces` requires the `document` identifier;
+`window.offscreenBuffering` requires the `window` identifier. `element.styleSheet` skips the
+`styleSheet.rules` chain because WL-DOM-003 already reports that more specific pattern — a
+dedicated test asserts the pair produces one finding, not two. The HTML attribute rule only sees
+real attributes, so the same text in a comment does not match.
+
+**Tests.** One firing fixture per rule, the metadata/message gates, and a five-case anti-false-
+positive file covering comments/strings, lookalike members, the `styleSheet.rules` overlap, the
+second variants (`onpropertychange`, `removeBehavior`), and an `onpropertychange` attribute inside a
+comment.
+
+**Verification.** A synthetic project containing all six APIs plus comment and string decoys
+produced eight findings (five MANUAL, three UNSUPPORTED) and zero decoy hits. The bundled fixture
+stayed at 12 files / 99 findings / 22 auto-convertible. The catalog is regenerated at 56 rules; the
+rule-doc drift test passes.
+
+Suite: 224 tests.
+
+---
+
+## 34. Thirtieth increment — a function-level rewrite unlocks the biggest manual bucket
+
+`window.event` was the largest MANUAL bucket (17 fixture findings). Per-occurrence recipes cannot
+fix it: the handler needs a parameter, and every reference inside it changes. The tool now models
+that as one handler-level finding and one recipe.
+
+**Rule WL-JS-017 emits one finding per eligible handler, anchored at the signature.** Eligibility,
+all in the same file: zero parameters; a registration through `attachEvent`, `detachEvent`,
+`addEventListener`, `removeEventListener` or an `on*` property; no other use of the function name
+(a direct call, timer or callback blocks it); no `window.event` inside a nested function; no
+`arguments` use; no local `event` binding; and not `beforeunload`/`unload`. The finding's evidence
+carries the whole-function range and the exact reference spans. `WL-JS-003` suppresses the
+per-reference findings covered by an eligible handler, so the dashboard counts one automatable unit
+instead of double-reporting.
+
+**Recipe RCP-HANDLER-EVENT-PARAM** injects `event` into the empty parameter list and replaces each
+covered `window.event` with it, as multiple non-overlapping edits. Preconditions re-run the handler
+analysis on the current file; a changed shape blocks. It deliberately does not rewrite
+`srcElement`/`returnValue`/`cancelBubble`: after the signature migration and a rescan those findings
+satisfy their existing recipes. The integration test proves the whole chain: handler finding →
+`function onRowClick(event)` with no `window.event` → rescan → `srcElement`/`cancelBubble` become
+SAFE → migrate → `event.target`/`event.stopPropagation()`.
+
+**Counts.** The fixture moved from 99 to 98 findings: six covered `window.event` references are
+suppressed and five handler findings are added. Auto-convertible rose from 22 to 27 (10 SAFE, 17
+CONDITIONAL); MANUAL fell from 67 to 61 (4 candidates, 9 blocked, 48 judgement); high risk 44 → 43;
+`modern.js` is still 0. The count moved because one handler unit replaced per-reference manual
+findings, not because coverage was lost.
+
+**Tests and mutation checks.** Five handler tests cover the one-finding-plus-suppression shape,
+the direct-call/local-event/nested/`arguments` exclusions, the beforeunload/parameter exclusions,
+anonymous and `on*` positives, and the migration → rescan → property-migration chain. The nested
+negative was first a false green — a handler whose only reference was nested was already ineligible
+for a different reason — and was strengthened with a top-level plus nested reference. Disabling the
+identifier-use guard, the nested guard or the `WL-JS-003` suppression each turned the relevant
+assertion red.
+
+**UI.** The handler finding appears as a migration candidate; previewing it shows the signature edit
+and every reference replacement in one diff. The fixture file was only previewed, never written.
+
+Suite: 229 tests.
+
+---
+
+## 35. Thirty-first increment — a handler registered in another file
+
+The function-level handler rewrite could only see a registration in the same file. Shared JS files
+often define handlers that a page script or another JS file registers **by reference**; those
+definitions stayed invisible.
+
+**File facts now carry handler evidence.** Each `FileRefFacts` records eligible zero-argument
+handler definitions (signature offsets, lines, snippet, `window.event` spans, `otherUses`) and named
+registrations (`attachEvent`/`addEventListener`/`on*`, event name, line). The facts live in
+`file_fact`, so they survive incremental reuse. Old facts lack the fields; `WL-JS-017` and its
+recipe were bumped to `1.1.0`, which changes the rule signature and forces the first post-upgrade
+scan to parse every file and rebuild the facts.
+
+**A project pass matches definitions to registrations in other files.** After preparation, a
+definition in file A is matched to a by-reference registration in file B when: the registration is
+not in A (that is the per-file rule's job); the name is not called anywhere in the scanned files
+(`facts.calls`); the definition has no other local use; and the definition lives in a `.js` file.
+The finding is emitted in the definition file with the `rules.WL-JS-017.crossFile` message and
+evidence carrying the registration file(s) and the handler offsets. The covered per-reference
+`WL-JS-003` rows are deleted before the finding is added, the file row's finding count is adjusted,
+and the dashboard therefore counts one automatable unit.
+
+**The recipe works from evidence offsets.** `findHandlerAt` locates the definition by
+`handlerStart`/`handlerEnd` and re-checks its body eligibility. The registration file is not edited:
+a by-reference registration passes the event as the first argument.
+
+**Cross-file safety.** Preview reads every registration file and compares its bytes with the
+`scan_file.hash` captured at scan time. A changed registration blocks the item with "Registration
+file ... changed after the scan". Execute recomputes the preview, so an execution against the old
+plan aborts on the changed `planHash`.
+
+**Scope exclusions.** Inline handler calls such as `onclick="fn()"` are recorded as calls and block
+the by-reference path; handlers with parameters, registrations outside the scanned project, and
+definitions in non-`.js` files are not offered. These remain for a later increment.
+
+**Tests and mutations.** Five cross-file cases: the full cycle (definition finding → signature
+migration → rescan → `srcElement`/`cancelBubble` become SAFE → migrate to `target`/
+`stopPropagation`), a direct-call negative, same-file deduplication, a changed-registration block,
+and the zh/ja message variant. Disabling the direct-call check or the registration-hash check each
+turned a test red. The bundled fixture stayed at 12 files / 98 findings / 27 auto-convertible.
+
+**UI.** A `shared.js` + `page.js` demo shows the cross-file finding as a migration candidate; the
+preview shows the signature and reference edits while the evidence names `page.js` as the
+registration file.
+
+Suite: 234 tests.
+
+---
+
+## 36. Thirty-second increment — an inline on* call rewritten with its function
+
+The handler rewrite covered by-reference registrations but not the common JSP shape
+`onclick="onUpdateClick()"` calling a zero-argument function defined in the same file. The function
+needed an event parameter and the call needed to pass it; both changes belong to one reviewed plan.
+
+**Inline on* calls are a handler source.** The per-file handler analysis treats a zero-argument call
+inside an inline `on*` unit (container `onclick attribute (<input>)`) as a registration. The callee
+identifier is allowed in the function's use check; a non-inline call, an inline call with
+arguments, or a dynamic inline unit leaves the handler ineligible. The rule emits the `.inline`
+message variant with the inline-call count, and the covered per-reference `window.event` findings
+are suppressed as before.
+
+**One recipe, one file, every covered edit.** The recipe injects the event parameter, replaces the
+function's `window.event` references, and inserts `event` into each inline call. The insertion only
+works when the call's argument list is empty; otherwise the recipe blocks. The plan preview, the
+hash check and the atomic write are unchanged.
+
+**Tests and mutations.** A JSP with `onclick="onUpdateClick()"` and the function in the same file
+goes through signature + call rewrite, then a rescan makes the `returnValue` finding applicable; a
+non-inline call and an inline call with an argument are rejected; the zh/ja `.inline` variant
+renders. Allowing an argument-passing call made the ineligible test red; disabling the inline-call
+edit made the plan-edits/execution assertions red.
+
+**Fixture.** 98 → 96 findings: four `window.event` references in the two inline handlers are
+suppressed and two handler findings are added. Auto-convertible 27 → 29 (10 SAFE, 19 CONDITIONAL);
+MANUAL 61 → 57 (4 candidates, 9 blocked, 44 judgement); high risk 43 → 41; `window.event` findings
+11 → 7; `modern.js` stays 0. There are now seven handler findings, two of them inline.
+
+**Remaining.** Cross-file inline calls (a shared definition called from another file) are still
+recorded as calls and block the by-reference path; they need a multi-file plan and are the next
+increment. Handlers with parameters and timer/async uses remain manual.
+
+Suite: 238 tests.
+
+---
+
+## 37. Thirty-third increment — a cross-file inline call goes into one reviewed plan
+
+The inline-call rewrite covered calls in the same file. A shared JS handler called from a JSP inline
+attribute needed a definition edit in one file and a call edit in another; the old architecture had
+no way to review or apply them as one unit.
+
+**Facts now include inline calls and direct calls.** `FileRefFacts.inlineCalls` records every
+zero-argument call inside an inline `on*` unit (file, line/column, offsets, event, snippet) and
+`directCalls` records names called anywhere else — a script block, an inline handler with
+arguments, or a dynamic unit. The latter is the block signal: a function called anywhere outside a
+zero-argument inline handler cannot be migrated by changing one signature.
+
+**The project pass emits a companion group.** A definition in a `.js` file matched to inline calls
+in other files produces a definition finding (`rules.WL-JS-017.inlineCalls`) and one call-site
+finding per call (`rules.WL-JS-017.inlineCallSite`). The definition finding carries the call-site
+files and counts; every finding carries the shared `companionFindingIds` string. The per-file
+handler finding for the same definition is replaced, and the covered `WL-JS-003` rows are removed
+with the file row counts kept aligned. The `.crossFile` by-reference path and inline sources can
+coexist in one definition finding.
+
+**Selection expands to the group.** `MigrationService.preview` walks `companionFindingIds`
+recursively, so selecting the definition or any call site returns the complete plan. The UI now
+selects every plan item after a preview; the execute set check and the planHash therefore cover the
+whole group. The definition recipe injects the parameter and replaces `window.event`; the call-site
+recipe inserts `event` in its own file. The existing multi-file transaction applies every file or
+none, and a call-site file changed after the scan marks its item stale, which aborts the execution.
+
+**Tests and mutations.** Five cross-file inline cases: definition-only and call-site-only expansion,
+atomic execution across two files, rescan making the property recipes applicable, direct-call and
+argument-passing negatives, a changed call-site abort, and both zh/ja message variants. Disabling
+the companion expansion or the direct-call guard each turned a test red. The bundled fixture is
+unchanged at 12 files / 96 findings / 29 auto-convertible.
+
+**UI.** A `shared.js` + `page.jsp` demo: the definition finding previews as a two-item plan, the
+UI auto-selects both, and the call-site diff shows `sharedRowClick(event)` while the definition
+diff shows the signature and `window.event` replacements.
+
+## 38. Thirty-fourth increment — a handler that already takes parameters
+
+Every earlier handler path rejected a function with parameters. That was too strict for the common
+JSP shape where the inline attribute passes arguments by hand: `onclick="sharedRowClick(rowId, this)"`
+calling `function sharedRowClick(row, sender)`. Inserting `event` in front of both the signature and
+every call is mechanical as long as the handler has no call site that the tool cannot edit.
+
+**The edit is position-aware.** `handlerParamEdit` inserts bare `event` when the parameter list is
+empty and `event, ` before the first parameter otherwise. `inlineCallEventEdit` does the same for
+the call's argument list: `event` when there are no arguments, `event, ` before the first one when
+there are. Existing parameters and arguments keep their order and spelling.
+
+**Only handlers whose every call site is an inline `on*` call qualify.** A by-reference
+registration (`attachEvent`, `on*` property) would pass the browser event into the old first
+parameter and shift all existing meanings, so a handler with parameters and any reference
+registration is rejected in both the per-file analysis and the cross-file project pass. A direct
+call outside an inline attribute still blocks through the existing use check. The body gate now
+also recognizes a parameter or local named `event`, and any other `event` identifier already in
+scope, as a binding conflict; `arguments` use and `window.event` inside a nested function remain
+exclusions.
+
+**Facts, companions, and the plan.** Handler facts now carry parameterized definitions (with
+`paramCount`) and inline calls of any arity (with `argumentCount`). The cross-file pass emits the
+definition finding with a call-site companion per inline call, as before. The definition recipe
+uses the position-aware signature edit; the call-site recipe inserts `event` first. The existing
+multi-file transaction, plan hash, auto-selection, and stale-file abort apply unchanged, so a
+parameterized cross-file group is reviewed and applied as one unit.
+
+**Tests and mutations.** Same-file positive (`onUpdateClick(this)` with a `sender` parameter),
+cross-file positive (two-item plan, both files edited), by-reference-with-parameters negatives in
+both the per-file and cross-file paths, and an existing-`event` negative. Disabling the
+by-reference/parameters guard in `findMigratableHandlers` or in the cross-file pass each turned its
+test red, and disabling the event-binding gate turned the existing-`event` test red. The bundled
+fixture is unchanged at 12 files / 96 findings / 29 auto-convertible because none of its handlers
+take parameters.
+
+**UI.** A demo project with `page.jsp` (`onclick="sharedRowClick(rowId, this)"`) and
+`js/shared.js` (`function sharedRowClick(row, sender)`): selecting the definition auto-selects the
+call site, the preview lists both files as 2/2 applicable, the signature becomes
+`function sharedRowClick(event, row, sender)`, and the call becomes
+`sharedRowClick(event, rowId, this)`.
+
+Suite: 245 tests.

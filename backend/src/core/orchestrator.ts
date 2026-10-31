@@ -163,6 +163,7 @@ export class ScanManager {
     if (this.runners.has(scanId)) return { ok: false, reason: `Scan ${scanId} is already started` };
 
     const lockToken = newId('lck');
+    this.store.enqueueProjectLock(scan.projectId, process.pid, lockToken);
     const lock = this.store.tryAcquireProjectLock(scan.projectId, process.pid, lockToken);
     if (lock.ok) {
       const runner: Runner = { cancelled: false, emitter: new EventEmitter(), log: [], projectId: scan.projectId, lockToken };
@@ -175,6 +176,7 @@ export class ScanManager {
 
     const reason = projectBusyReason(lock);
     if (this.lockWaitMs <= 0) {
+      this.store.dequeueProjectLock(scan.projectId, lockToken);
       this.store.updateScan(scanId, {
         status: 'FAILED',
         completedAt: nowIso(),

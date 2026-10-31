@@ -16,16 +16,17 @@ port can scan any directory that user can read, read the sources back, and apply
 copied to `backups/<executionId>/<path>` and hash-verified before the write, and rollback refuses if
 the file drifted since. Deleting the data directory therefore deletes the only backup the tool made.
 
-**Migrations and scans are serialized per project across processes, with a bounded wait.** A
+**Migrations and scans are serialized per project across processes, in a strict FIFO queue.** A
 database lock (owner pid + token) makes a second operation wait up to 30 seconds
-(`WEBLIFT_LOCK_WAIT_MS`) instead of interleaving, and the in-process queue still orders operations
-inside one process. A scan that has to wait stays `QUEUED`, shows the owner's pid and acquisition
-time, then starts when the lock is released; at the deadline it fails with a timeout reason.
-Migrations and rollbacks wait the same way and write nothing if the deadline expires. The lock is a
-bounded retry, not a FIFO queue: several waiters race, which is acceptable for a single-user tool. A
-live but hung owner holds the lock until the deadline (or until it is stopped), and PID reuse is a
-theoretical way to mistake a stale lock for a live owner. A rollback during an in-process migration
-is still refused immediately rather than queued.
+(`WEBLIFT_LOCK_WAIT_MS`) instead of interleaving. Each waiter first takes a per-project ticket and
+the lock is granted only to the lowest live ticket, so concurrent waiters start in enqueue order
+instead of racing. A scan that has to wait stays `QUEUED`, shows the owner's pid and acquisition
+time, then starts when the lock is released; at the deadline it fails with a timeout reason and
+drops its ticket, as does cancellation. Migrations and rollbacks wait the same way and write
+nothing if the deadline expires. Dead waiters and dead owners are removed on the next acquire. A
+live but hung owner still holds the lock until the deadline (or until it is stopped), PID reuse is
+a theoretical way to mistake a stale lock for a live owner, and a rollback during an in-process
+migration is still refused immediately rather than queued.
 
 **A transaction is claimed in the database before it touches the disk.** If the process is killed
 between the write and its confirmation, the row stays `PENDING` and the history shows it as
@@ -35,10 +36,10 @@ the claim, or a disk that loses the file after a successful write.
 
 ## Analysis
 
-**Only the implemented pattern set is detected.** 58 rules cover the IE features listed in the
+**Only the implemented pattern set is detected.** 62 rules cover the IE features listed in the
 specification plus removed APIs found in real legacy code. Anything outside that set is still
-invisible: a legacy `document.body.clientHeight` layout quirk, `event.srcUrn`, `event.recordset`,
-`style.setExpression`, and so on. A clean scan means "none of the covered patterns were found", not
+invisible: the layout quirks around `document.body.clientHeight`, `event.charCode`/`event.which`
+differences, and so on. A clean scan means "none of the covered patterns were found", not
 "this page works on Chrome".
 
 **Comment and string safety is per-rule.** The AST-based rules cannot match inside comments or
@@ -99,10 +100,11 @@ changes what `this` refers to inside the handler and requires handlers that read
 to take the event parameter instead. The handler-signature recipe does that for handlers registered
 by reference in the same or another scanned file, and for handlers reached only through
 `on*="fn(...)"` calls in the same or another scanned file; existing parameters and arguments keep
-their order with `event` inserted first. A handler with existing parameters that is also registered
-by reference, a handler called outside an inline `on*` attribute, and registrations outside the
-project still need a human. The recipe cannot see those consequences; the UI lists them as caveats
-that a human must confirm.
+their order with `event` inserted first, while `addEventListener`/`on*` handlers reuse their first
+parameter instead of changing the signature. An `attachEvent` handler with existing parameters, a
+handler called outside an inline `on*` attribute, and registrations outside the project still need
+a human. The recipe cannot see those consequences; the UI lists them as caveats that a human must
+confirm.
 
 **Function-level handler migration is deliberately narrow.** It offers a zero-parameter handler when
 all of these hold across the scanned files: a registration by reference through `attachEvent`,
@@ -110,12 +112,14 @@ all of these hold across the scanned files: a registration by reference through 
 no other use anywhere in the scanned files (a direct call, timer or callback blocks it); no
 `arguments` use; no local `event` binding or parameter named `event`; and not
 `beforeunload`/`unload`. A nested helper may read `window.event` only when it is declared in the
-handler, called directly from the handler body, not async or a generator, and does not bind
-`event`; a returned, passed, timer-invoked or deeper-nested helper blocks the finding. A handler
-with existing parameters is offered only when every call site is an inline `on*` call, because a
-by-reference registration would pass the browser event into the old first parameter instead of the
-new one. The recipe injects `event` first and replaces the handler's `window.event` references,
-including those in a synchronously called helper. For a cross-file registration the finding is emitted in the definition file (a `.js`
+handler, called directly from the handler body, not async or a generator, and does not bind the
+event parameter name; a returned, passed, timer-invoked or deeper-nested helper blocks the finding.
+A handler with existing parameters is offered in two cases: every call site is an inline `on*` call
+(so `event` is inserted first everywhere), or every registration passes the event first
+(`addEventListener` or an `on*` property) and the first parameter is reused without a signature
+change. An `attachEvent` handler with parameters is still manual because that registration does not
+pass the event. The recipe injects `event` first or reuses the existing parameter and replaces the
+handler's `window.event` references, including those in a synchronously called helper. For a cross-file registration the finding is emitted in the definition file (a `.js`
 file), the registration file is not edited, and preview verifies that the registration file still
 has the hash it had at scan time; if it changed, the finding is blocked until a rescan. Inline
 `on*="fn(...)"` calls in the same or another file are a source; existing arguments are kept and
@@ -137,6 +141,13 @@ inside a nested function, and uses as an assignment target or a `typeof`/`delete
 rescan, the `srcElement`/`returnValue`/`cancelBubble` recipes apply because the bare `event` is
 recognized as the implicit inline-handler argument; `window.event` in script blocks still requires
 the function-level migration.
+
+**`event.button` numbering is converted only for literal comparisons.** IE used 1/2/4 for
+left/right/middle and allowed combined values; Chrome uses 0/1/2 and exposes held buttons through
+`event.buttons`. The recipe rewrites an equality/inequality against literal 1 (left, becomes 0) or
+4 (middle, becomes 1). Bitmask tests (`&`), values stored in variables, comparisons against 0/2/3
+and combined-button logic remain manual. On `mousemove`, IE's "no button" 0 collides with Chrome's
+left-button 0, so the recipe asks for the handler's event type to be verified.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,
@@ -304,14 +315,11 @@ interrupted run and logs a warning instead of rebuilding them.
    The function-level handler signature now covers zero-argument handlers registered by reference,
    same-file inline calls, cross-file inline calls, and parameterized handlers whose call sites are
    all inline `on*` calls; inline attributes rewrite their own `window.event`; synchronous nested
-   helpers are covered. The remaining candidates are timers/async callbacks that read
-   `window.event` (they need a capture decision) and by-reference registrations of parameterized
-   handlers, each needing its own precondition argument.
-2. **Broaden detection coverage further.** Remaining examples include `event.srcUrn`,
-   `event.recordset`, `style.setExpression` and the layout quirks around
-   `document.body.clientHeight`. Each needs a rule, metadata and a firing fixture before it can be
-   reported.
-3. **Make the project lock a strict FIFO queue.** Waiters currently poll and race; operations are
-   bounded and visible, but not ordered. A ticket table would make the order predictable when a
-   CLI and the UI compete for the same project.
+   helpers are covered; `addEventListener`/`on*` handlers reuse their first parameter. The remaining
+   candidates are timers/async callbacks that read `window.event` (they need a capture decision) and
+   `attachEvent` handlers with parameters (they need a positional-binding decision), each requiring
+   its own precondition argument.
+2. **Broaden detection coverage further.** Remaining examples include the layout quirks around
+   `document.body.clientHeight` and `event.charCode`/`event.which` differences. Each needs a rule,
+   metadata and a firing fixture before it can be reported.
 

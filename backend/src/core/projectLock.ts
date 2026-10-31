@@ -3,6 +3,7 @@ import type { ProjectLockResult, Store } from '../storage/store.js';
 export interface LockOwner {
   ownerPid: number;
   acquiredAt: string;
+  queued?: boolean;
 }
 
 export const DEFAULT_LOCK_WAIT_MS = 30_000;
@@ -13,6 +14,12 @@ export function defaultLockWaitMs(): number {
 }
 
 export function projectBusyReason(owner: LockOwner): string {
+  if (owner.queued) {
+    return (
+      `Another operation is queued ahead of this one for the project (pid ${owner.ownerPid}, since ${owner.acquiredAt}). ` +
+      'Wait for it to finish.'
+    );
+  }
   return (
     `Another operation is already running on this project (pid ${owner.ownerPid}, since ${owner.acquiredAt}). ` +
     'Wait for it to finish, or stop it if it is stuck.'
@@ -41,21 +48,26 @@ export async function acquireProjectLock(
 ): Promise<LockWaitOutcome> {
   const started = Date.now();
   const pollMs = options.pollMs ?? 200;
-  let result = store.tryAcquireProjectLock(projectId, ownerPid, token);
-  if (result.ok) return { result, waitedMs: 0, timedOut: false, cancelled: false };
+  store.enqueueProjectLock(projectId, ownerPid, token);
+  try {
+    let result = store.tryAcquireProjectLock(projectId, ownerPid, token);
+    if (result.ok) return { result, waitedMs: 0, timedOut: false, cancelled: false };
 
-  while (Date.now() - started < options.waitMs) {
-    if (options.isCancelled?.()) {
-      return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: true };
+    while (Date.now() - started < options.waitMs) {
+      if (options.isCancelled?.()) {
+        return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: true };
+      }
+      const remaining = options.waitMs - (Date.now() - started);
+      await new Promise((done) => setTimeout(done, Math.min(pollMs, Math.max(1, remaining))));
+      if (options.isCancelled?.()) {
+        return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: true };
+      }
+      result = store.tryAcquireProjectLock(projectId, ownerPid, token);
+      if (result.ok) return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: false };
     }
-    const remaining = options.waitMs - (Date.now() - started);
-    await new Promise((done) => setTimeout(done, Math.min(pollMs, Math.max(1, remaining))));
-    if (options.isCancelled?.()) {
-      return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: true };
-    }
-    result = store.tryAcquireProjectLock(projectId, ownerPid, token);
-    if (result.ok) return { result, waitedMs: Date.now() - started, timedOut: false, cancelled: false };
+
+    return { result, waitedMs: Date.now() - started, timedOut: true, cancelled: false };
+  } finally {
+    store.dequeueProjectLock(projectId, token);
   }
-
-  return { result, waitedMs: Date.now() - started, timedOut: true, cancelled: false };
 }

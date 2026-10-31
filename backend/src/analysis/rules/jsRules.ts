@@ -1628,6 +1628,90 @@ define({
 
 define({
   meta: {
+    id: 'WL-DOM-015',
+    name: 'event.srcUrn',
+    version: '1.0.0',
+    description: 'IE-only event.srcUrn from HTML behaviors. Chrome has no behaviors and no source URN for the event target.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'LOW',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: MemberExpression with property srcUrn on a confirmed event parameter or inline handler event. window.event.srcUrn stays with WL-JS-003.',
+    tags: ['event', 'ie-only-api', 'behavior'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'srcUrn') return;
+      if (memberPath(node.object as JsNode) === 'window.event') return;
+      const { isEvent, objectName } = eventObjectConfidence(node, ancestors, unit);
+      if (!isEvent) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads IE-only ${objectName ?? 'event'}.srcUrn`,
+          risk:
+            'srcUrn came from an attached HTML behavior and is undefined in Chrome. Comparisons silently evaluate to false, while property access afterwards throws.',
+          recommendation:
+            'Remove the behavior dependency. If the URN identified a component or behavior, replace that layer with an explicit module and map the event to the element/class that owns it.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { objectName: objectName ?? '(non-identifier)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
+    id: 'WL-DOM-016',
+    name: 'event.recordset',
+    version: '1.0.0',
+    description: 'IE data-binding recordset exposed on bound events. Chrome has no IE data binding, so the object is always undefined.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'HIGH',
+    defaultMigrationLevel: 'UNSUPPORTED',
+    basis: 'AST match: MemberExpression with property recordset on a confirmed event parameter or inline handler event. window.event.recordset stays with WL-JS-003.',
+    tags: ['event', 'ie-only-api', 'data-binding'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'recordset') return;
+      if (memberPath(node.object as JsNode) === 'window.event') return;
+      const { isEvent, objectName } = eventObjectConfidence(node, ancestors, unit);
+      if (!isEvent) return;
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads IE data-binding ${objectName ?? 'event'}.recordset`,
+          risk:
+            'IE data binding kept an ADO recordset on the event object; Chrome never populates it, so reads throw and the bound grid/detail logic stops updating. The surrounding feature depends on a data-binding subsystem that Chrome does not implement.',
+          recommendation:
+            'Treat this as a redesign: fetch or hold the rows in application state, update the DOM explicitly (or use a framework), and replace the recordset cursor logic with array/index logic. There is no mechanical API swap.',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: { objectName: objectName ?? '(non-identifier)', touchesDynamicRegion: unit.dynamic },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+define({
+  meta: {
     id: 'WL-BEH-005',
     name: 'window.offscreenBuffering',
     version: '1.0.0',
@@ -1671,13 +1755,13 @@ define({
   meta: {
     id: 'WL-JS-017',
     name: 'IE event handler signature',
-    version: '1.5.0',
-    description: 'Handler that reads window.event, including a nested helper it calls synchronously. Chrome passes the event first; existing parameters are kept when every call site is an inline on* call.',
+    version: '1.6.0',
+    description: 'Handler that reads window.event, including a nested helper it calls synchronously. Chrome passes the event first; existing parameters are kept when every call site is an inline on* call, or reused when the handler is registered with addEventListener/on*.',
     language: 'javascript',
     category: 'JS_API',
     defaultSeverity: 'HIGH',
     defaultMigrationLevel: 'CONDITIONAL',
-    basis: 'AST match: function reading window.event; by-reference registrations, inline on* calls, or cross-file calls; synchronous nested helpers; parameters only with inline-only call sites.',
+    basis: 'AST match: function reading window.event; by-reference registrations, inline on* calls, or cross-file calls; synchronous nested helpers; addEventListener/on* handlers reuse their first parameter; parameters only with inline-only call sites otherwise.',
     recipeId: 'RCP-HANDLER-EVENT-PARAM',
     tags: ['event', 'window-event', 'handler'],
   },
@@ -1686,19 +1770,22 @@ define({
     for (const handler of findMigratableHandlers(ctx)) {
       const count = handler.windowEventNodes.length;
       const inlineCount = handler.inlineCallCount;
+      const reuseParam = handler.reuseParam;
       out.push(
         makeFinding(this as unknown as Rule, ctx, {
-          variant: inlineCount > 0 ? 'inline' : undefined,
+          variant: reuseParam ? 'reuse' : inlineCount > 0 ? 'inline' : undefined,
           startOffset: handler.start,
           endOffset: handler.signatureEnd,
-          message:
-            inlineCount > 0
+          message: reuseParam
+            ? `IE event handler ${handler.name} already receives the event as ${reuseParam} but reads window.event (${count} reference${count === 1 ? '' : 's'})`
+            : inlineCount > 0
               ? `IE event handler ${handler.name} uses window.event (${count} reference${count === 1 ? '' : 's'}, ${inlineCount} inline call${inlineCount === 1 ? '' : 's'})`
               : `IE event handler ${handler.name} uses window.event (${count} reference${count === 1 ? '' : 's'})`,
           risk:
-            'The handler reads the IE-only window.event global. Chrome passes the event object as the first handler argument, so this handler throws on its first event unless the reference is rewritten. The transform is mechanical but changes the function signature.',
-          recommendation:
-            'Migrate this finding to add the event parameter and replace every window.event reference in the handler. Rescan afterwards: the srcElement, returnValue and cancelBubble reads then satisfy their own recipes. The attachEvent registration still needs its separate migration.',
+            'The handler reads the IE-only window.event global. Chrome passes the event object as the first handler argument, so this handler throws on its first event unless the reference is rewritten.',
+          recommendation: reuseParam
+            ? `Migrate this finding to replace every window.event reference with the existing first parameter ${reuseParam}; the signature does not change. Rescan afterwards: the srcElement, returnValue and cancelBubble reads then satisfy their own recipes.`
+            : 'Migrate this finding to add the event parameter and replace every window.event reference in the handler. Rescan afterwards: the srcElement, returnValue and cancelBubble reads then satisfy their own recipes. The attachEvent registration still needs its separate migration.',
           evidence: {
             kind: 'Function',
             matched: ctx.text.slice(handler.start, handler.signatureEnd),
@@ -1710,6 +1797,7 @@ define({
               inlineCallCount: inlineCount,
               paramCount: handler.paramCount,
               inlineInDefinitionFile: inlineCount > 0,
+              ...(reuseParam ? { eventParam: reuseParam } : {}),
               handlerStart: handler.start,
               handlerEnd: handler.end,
             },
@@ -1766,6 +1854,130 @@ define({
         }),
       );
     }
+    return out;
+  },
+});
+
+function buttonComparisonLiteral(node: JsNode, ancestors: JsNode[]): JsNode | null {
+  const parent = ancestors[ancestors.length - 1];
+  if (!parent || parent.type !== 'BinaryExpression') return null;
+  if (!['==', '===', '!=', '!=='].includes(String(parent.operator))) return null;
+  const left = parent.left as JsNode | undefined;
+  const right = parent.right as JsNode | undefined;
+  if (left === node && right?.type === 'NumericLiteral') return right;
+  if (right === node && left?.type === 'NumericLiteral') return left;
+  return null;
+}
+
+define({
+  meta: {
+    id: 'WL-JS-019',
+    name: 'IE event.button value',
+    version: '1.0.0',
+    description:
+      'Reads event.button, whose numbering differs: IE used 1/2/4 for left/right/middle, Chrome uses 0/1/2 plus the buttons bitmask.',
+    language: 'javascript',
+    category: 'DOM_API',
+    defaultSeverity: 'HIGH',
+    defaultMigrationLevel: 'MANUAL',
+    basis:
+      'AST match: .button on a confirmed event parameter or inline handler event. window.event.button is covered by WL-JS-003. Only literal 1/4 equality comparisons are convertible.',
+    recipeId: 'RCP-EVENT-BUTTON',
+    tags: ['event', 'ie-only-api', 'mouse'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, ancestors, unit) => {
+      if (node.type !== 'MemberExpression' || propName(node) !== 'button') return;
+      if (memberPath(node.object as JsNode) === 'window.event') return;
+      const { isEvent, objectName } = eventObjectConfidence(node, ancestors, unit);
+      if (!isEvent) return;
+      const literal = buttonComparisonLiteral(node, ancestors);
+      const convertible = literal !== null && (literal.value === 1 || literal.value === 4);
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Reads event.button with the IE button numbering${literal ? ` (literal ${String(literal.value)})` : ''}`,
+          risk:
+            'IE reported left/right/middle as 1/2/4 and allowed combined values; Chrome reports one standard button as 0/1/2 and exposes held buttons through event.buttons. Code that compares or stores event.button silently changes meaning instead of throwing.',
+          recommendation: convertible
+            ? 'Migrate this comparison to the Chrome literal (left 1 -> 0, middle 4 -> 1). For held-button checks, use the event.buttons bitmask instead, and verify the handler is a click/mousedown/mouseup path: on mousemove IE reported 0 for no button.'
+            : 'Review the comparison against the Chrome numbering and the buttons bitmask. Bitmask tests, reads assigned to variables, and combined-button logic cannot be rewritten mechanically.',
+          migrationLevel: convertible ? 'CONDITIONAL' : 'MANUAL',
+          confidence: 'CONFIRMED',
+          evidence: {
+            kind: 'MemberExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0),
+            container: unit.container,
+            detail: {
+              objectName: objectName ?? '(non-identifier)',
+              objectIsEventParam: true,
+              buttonValue: literal ? String(literal.value) : '(expression)',
+              touchesDynamicRegion: unit.dynamic,
+            },
+          },
+        }),
+      );
+    });
+    return out;
+  },
+});
+
+function isStyleObject(node: JsNode | undefined): boolean {
+  if (!node) return false;
+  if (node.type === 'MemberExpression') return propName(node) === 'style';
+  if (node.type !== 'Identifier') return false;
+  const name = String(node.name);
+  return /style$/i.test(name);
+}
+
+define({
+  meta: {
+    id: 'WL-JS-020',
+    name: 'style.setExpression',
+    version: '1.0.0',
+    description: 'IE-only dynamic CSS through style.setExpression and removeExpression. Chrome has neither method.',
+    language: 'javascript',
+    category: 'CSS_COMPAT',
+    defaultSeverity: 'MEDIUM',
+    defaultMigrationLevel: 'MANUAL',
+    basis: 'AST match: a setExpression or removeExpression call on a style object (element.style, or an identifier ending in "style").',
+    tags: ['css', 'ie-only-api', 'dynamic-css'],
+  },
+  detect(ctx) {
+    const out: RawFinding[] = [];
+    eachNode(ctx, (node, _ancestors, unit) => {
+      if (node.type !== 'CallExpression') return;
+      const callee = node.callee as JsNode | undefined;
+      if (!callee || callee.type !== 'MemberExpression') return;
+      const method = propName(callee);
+      if (method !== 'setExpression' && method !== 'removeExpression') return;
+      const object = callee.object as JsNode | undefined;
+      if (!isStyleObject(object)) return;
+      const objectText = object ? ctx.text.slice(object.start ?? 0, object.end ?? 0) : 'style';
+      out.push(
+        makeFinding(this as unknown as Rule, ctx, {
+          startOffset: node.start ?? 0,
+          endOffset: node.end ?? 0,
+          message: `Calls IE-only ${objectText}.${method}()`,
+          risk:
+            'setExpression and removeExpression do not exist in Chrome, so the call throws. The expressions themselves were evaluated continuously against DOM state, a dynamic behaviour with no direct CSS equivalent.',
+          recommendation:
+            'Replace the expression with a plain style assignment or a CSS class updated when the inputs change. If the expression recalculated on layout or scroll, move that logic into the corresponding event handler and verify the initial state.',
+          evidence: {
+            kind: 'CallExpression',
+            matched: ctx.text.slice(node.start ?? 0, node.end ?? 0).slice(0, 200),
+            container: unit.container,
+            detail: {
+              methodName: method,
+              objectText,
+              touchesDynamicRegion: unit.dynamic,
+            },
+          },
+        }),
+      );
+    });
     return out;
   },
 });

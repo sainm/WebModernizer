@@ -62,15 +62,17 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 254 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 273 tests: parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
-                #            cross-process project locks, bounded lock waits,
+                #            cross-process project locks, strict FIFO lock queue,
                 #            remaining IE-only detection, handler signature migration,
                 #            cross-file handler migration, inline handler calls,
                 #            cross-file inline calls, handlers with existing parameters,
-                #            inline attribute window.event, nested handler helpers
+                #            inline attribute window.event, nested handler helpers,
+                #            reusing an existing event parameter, event.button numbering,
+                #            srcUrn / recordset / setExpression detection
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -86,19 +88,21 @@ like an IE API call inside a comment or a string literal must not be reported.
 | File discovery with symlink/traversal guards, binary and size filtering | done |
 | HTML, JavaScript, CSS parsing with source locations | done |
 | JSP: layered analysis of the static fragments, dynamic regions masked | done |
-| 58 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
+| 62 IE-compatibility rules (JS/DOM/HTML/CSS/ActiveX/dynamic code) | done |
 | Scan pipeline with phases, SSE progress, cancel, persistence | done |
 | Crash-resumable scans: atomic batches during the run, stale RUNNING runs reclaimed, prefix reused | done |
 | Manual fix verification: mark fixed in code, next comparable scan records VALIDATED / VALIDATION_FAILED | done |
-| Cross-process project lock: scans queue up to 30 s (`WEBLIFT_LOCK_WAIT_MS`), migrations/rollbacks wait, dead owners reclaimed | done |
+| Cross-process project lock: waiters take tickets and acquire strictly in FIFO order, up to 30 s (`WEBLIFT_LOCK_WAIT_MS`); dead owners/waiters reclaimed | done |
 | Dashboard, findings explorer with 3-pane layout + Monaco source view | done |
 | Cross-file reference graph with CONFIRMED / INFERRED / UNKNOWN edges | done |
 | 14 migration recipes with preview diff, hash-verified apply, batch rollback | done |
 | Function-level handler migration: inject event first and replace window.event, including in a nested helper called synchronously, keeping parameters and arguments in order | done |
 | Cross-file handler migration: a function defined in a shared file and registered by reference in another file | done |
 | Inline handler calls: same-file or cross-file, with cross-file call sites linked as companions in one multi-file plan | done |
-| Handlers with existing parameters: offered only when every call site is an inline on* call, so event is inserted first everywhere | done |
+| Handlers with existing parameters: inline-only call sites get event inserted first; addEventListener/on* handlers reuse their first parameter | done |
 | Inline handler attributes: replace window.event with the event argument the attribute already receives, then unlock the property recipes | done |
+| IE event.button numbering: left/middle literal comparisons are rewritten to Chrome 0/1; reads and bitmask tests stay manual | done |
+| Detection for event.srcUrn, event.recordset and style.setExpression/removeExpression | done |
 | Static validation after migration | done |
 | Encoding-faithful write-back for non-UTF-8 sources (Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16, UTF-8 BOM) | done |
 | Multi-file transactions: one execute() = one session, all-or-nothing, one rollback | done |
@@ -140,10 +144,12 @@ like an IE API call inside a comment or a string literal must not be reported.
    the next comparable scan must no longer report it, and must have parsed its file completely,
    before it becomes `VALIDATED`. Otherwise both the claim and the current occurrence become
    `VALIDATION_FAILED`.
-9. **One writer per project, across processes.** Scans and migrations take a database lock keyed by
-   project, with owner pid and token. A second operation waits up to 30 seconds (configurable),
-   then fails with the owner's pid and acquisition time instead of interleaving; a queued scan shows
-   that reason in the UI. A lock whose owner is gone is reclaimed on the next acquire.
+9. **One writer per project, across processes, in queue order.** Scans and migrations take a
+   database lock keyed by project, with owner pid and token. Waiters take per-project tickets and
+   the lock goes to the lowest live ticket, so they start in enqueue order rather than racing. A
+   second operation waits up to 30 seconds (configurable), then fails with the owner's pid and
+   acquisition time instead of interleaving; a queued scan shows that reason in the UI. Dead owners
+   and dead waiters are reclaimed on the next acquire.
 10. **A function-level rewrite is anchored to the signature, not the body.** The handler finding
     points at the function signature; the verified whole-function range and the exact window.event
     spans travel in evidence. The scan suppresses the per-reference window.event findings for that
@@ -239,20 +245,20 @@ detected and that findings inside it land on the correct line.
 | # | Criterion | Where |
 | --- | --- | --- |
 | 1 | Scan a given local legacy project | `POST /api/projects/:id/scans`, CLI |
-| 2 | Classify the covered IE issues | 58 rules, `docs/RULES.md` |
+| 2 | Classify the covered IE issues | 62 rules, `docs/RULES.md` |
 | 3 | Every finding locates file + position | `analysis/engine.ts`, verified in tests |
 | 4 | Evidence and recommendation per finding | `AnalysisFinding.risk/recommendation/evidence` |
 | 5 | Dashboard → findings | Scan detail cards link into the explorer |
 | 6 | Filter down to a specific problem | Findings explorer (severity/level/status/category/rule/path/search) |
 | 7 | Confirmed page↔script references | `analysis/projectReferences.ts`, dependency view |
 | 8 | Report parse failures and unknown deps | `parse_problem` table, `UNKNOWN` edges |
-| 9 | Preview at least one real transformation | 15 recipes, `POST /api/migrations/preview` |
+| 9 | Preview at least one real transformation | 16 recipes, `POST /api/migrations/preview` |
 | 10 | See the diff before/after | Monaco side-by-side diff |
 | 11 | No silent overwrite on failure | temp write → re-parse → rename, backup restore |
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 254 tests |
+| 15 | Automated tests for core behaviour | 273 tests |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

@@ -62,4 +62,49 @@ describe('project locks', () => {
     expect(second.getProjectLock('prj_1')?.ownerPid).toBe(process.pid);
     expect(second.getProjectLock('prj_1')?.ownerToken).toBe('live-token');
   });
+
+  it('serves queued tickets strictly in order, even while the lock is free', () => {
+    const { first, second } = setup();
+    const ticketB = first.enqueueProjectLock('prj_fifo', process.pid, 'b');
+    const ticketC = second.enqueueProjectLock('prj_fifo', process.pid, 'c');
+    expect(ticketB).toBe(1);
+    expect(ticketC).toBe(2);
+
+    const blocked = second.tryAcquireProjectLock('prj_fifo', process.pid, 'c');
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.queued).toBe(true);
+      expect(blocked.ownerToken).toBe('b');
+    }
+
+    expect(first.tryAcquireProjectLock('prj_fifo', process.pid, 'b').ok).toBe(true);
+    expect(second.tryAcquireProjectLock('prj_fifo', process.pid, 'c').ok).toBe(false);
+
+    first.releaseProjectLock('prj_fifo', 'b');
+    expect(second.tryAcquireProjectLock('prj_fifo', process.pid, 'c').ok).toBe(true);
+    expect(second.listProjectLockQueue('prj_fifo')).toHaveLength(0);
+    second.releaseProjectLock('prj_fifo', 'c');
+  });
+
+  it('does not let a caller without a ticket jump a live waiter', () => {
+    const { first } = setup();
+    first.enqueueProjectLock('prj_jump', process.pid, 'waiter');
+    const jumped = first.tryAcquireProjectLock('prj_jump', process.pid, 'no-ticket');
+    expect(jumped.ok).toBe(false);
+    if (!jumped.ok) expect(jumped.queued).toBe(true);
+
+    expect(first.tryAcquireProjectLock('prj_jump', process.pid, 'waiter').ok).toBe(true);
+    first.releaseProjectLock('prj_jump', 'waiter');
+  });
+
+  it('drops dead waiters before serving the next ticket', () => {
+    const { first } = setup();
+    first.enqueueProjectLock('prj_dead', DEAD_PID, 'dead-waiter');
+    first.enqueueProjectLock('prj_dead', process.pid, 'live');
+    expect(first.listProjectLockQueue('prj_dead').map((entry) => entry.token)).toEqual(['live']);
+
+    expect(first.tryAcquireProjectLock('prj_dead', process.pid, 'live').ok).toBe(true);
+    expect(first.listProjectLockQueue('prj_dead')).toHaveLength(0);
+    first.releaseProjectLock('prj_dead', 'live');
+  });
 });

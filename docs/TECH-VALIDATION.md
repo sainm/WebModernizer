@@ -1641,3 +1641,144 @@ and after a rescan the two property recipes are applicable while `attachEvent` r
 conditional finding.
 
 Suite: 254 tests.
+
+## 41. Thirty-seventh increment — reuse the parameter an event-first registration already fills
+
+The parameter gate treated every parameterized handler registered by reference as unsafe. That is
+right for `attachEvent`, which passes nothing, but wrong for `addEventListener` and `on*` properties:
+the browser already passes the event as the first argument, so a handler that also reads
+`window.event` only needs its references renamed.
+
+**Candidate facts now distinguish registration kinds.** Each candidate records whether it was
+registered by `addEventListener`/an `on*` property (event first) or by `attachEvent` (nothing
+passed). A handler with parameters is offered in reuse mode only when it has an event-first
+registration, no `attachEvent` registration, no inline call sites, and a plain first parameter that
+is not named `event` (the conservative existing-binding gate still rejects that spelling). Otherwise
+the previous rules apply: inline-only call sites insert `event`, and everything else with parameters
+stays manual.
+
+**The recipe skips the signature edit.** With `eventParam` in the evidence, the recipe verifies the
+first parameter still has that name and that the registration is not `attachEvent`, then replaces
+every `window.event` span with the parameter name; nested helpers are accepted only when the helper
+does not bind that name. The finding uses `rules.WL-JS-017.reuse` and names the parameter in the
+summary. Cross-file definitions with parameters are still skipped by the project pass, because the
+same-file registration kind is what makes reuse safe.
+
+**Tests and mutations.** Five cases: an `addEventListener` handler reused through `evt` (then a
+rescan makes `stopPropagation` applicable), an `on*` property with `sender` (then `preventDefault`),
+an anonymous handler, a nested helper, and the reuse message in zh/ja. Negatives: `attachEvent` with
+a parameter, a direct call, mixed `addEventListener` + `attachEvent`, an inline call plus a
+reference registration, a first parameter named `event`, a destructured first parameter,
+`arguments`, a local `event` binding, and a nested helper that shadows the reused name. Disabling the
+mixed-registration guard, the inline-call guard, the helper-shadow guard, or the signature-skip each
+turned a test red. The bundled fixture is unchanged at 12 files / 96 findings / 29
+auto-convertible.
+
+**UI.** A demo with `function onRowClick(evt)` registered through `addEventListener`: the finding
+reads "已通过 evt 接收事件…", the diff changes only the two `window.event` references, and after a
+rescan the `cancelBubble`/`returnValue` recipes are applicable.
+
+Suite: 259 tests.
+
+## 42. Thirty-eighth increment — the button numbering that silently changes meaning
+
+The rule set covered `window.event`, `srcElement`, `returnValue` and `cancelBubble`, but not
+`event.button`. IE reported left/right/middle as 1/2/4 and could combine them; Chrome reports a
+single standard button as 0/1/2 and exposes held buttons through `event.buttons`. Comparing the same
+number therefore changes meaning without throwing, which is exactly the silent breakage the tool
+exists to surface.
+
+**One rule, two levels.** `WL-JS-019` matches `.button` only on a confirmed event object — a handler
+parameter or the implicit inline-handler `event` — and skips `window.event.button`, which `WL-JS-003`
+already covers. An equality/inequality (`==`, `===`, `!=`, `!==`) against the literal 1 or 4 is
+`CONDITIONAL`; every other read, bitmask test, comparison against 0/2/3 and combined-button use is
+`MANUAL`. The finding records the compared literal (or `(expression)`) in its evidence.
+
+**The recipe rewrites only the literal.** `RCP-EVENT-BUTTON` re-locates the member and its immediate
+comparison, checks that the object is still a confirmed event, and replaces 1 with 0 (left) or 4
+with 1 (middle); the operator and the rest of the expression are untouched. The caveats state that
+bitmask tests and held-button logic need `event.buttons`, and that on `mousemove` IE's "no button" 0
+collides with Chrome's left-button 0.
+
+**Why the other values stay manual.** Right is 2 in both models, but a value that matches by
+coincidence is not a migration; combined IE values (3, 5, 6, 7) and 0 have no single-button Chrome
+equivalent. The honest replacement for held-button logic is the `buttons` bitmask, which the recipe
+cannot synthesize from a `button` comparison.
+
+**Tests and mutations.** Five cases: level mapping across `==1`, `4===`, `!=4`, `==2`, bitmask and a
+plain read; the implicit inline-handler event; lookalikes (`obj.button`, `event.buttonId`,
+`event.buttons`, `custom.button`) and `window.event.button`; a full preview/execute that changes the
+literal to 0; and the zh/ja messages. Disabling the 1/4 gate, the comparison-operator gate, or the
+confirmed-event gate each turned a test red. The bundled fixture has no `event.button`, so it stays
+at 12 files / 96 findings / 29 auto-convertible.
+
+**UI.** A demo `mousedown` handler with `event.button == 1` and `event.button & 4`: only the literal
+comparison appears as a migration item, and its diff changes `1` to `0`; the bitmask line remains a
+manual finding.
+
+Suite: 264 tests.
+
+## 43. Thirty-ninth increment — three more blind spots that fail quietly
+
+`event.srcUrn`, `event.recordset` and `style.setExpression` were listed in the limitations as
+invisible, and each fails without a recognizable exception in Chrome.
+
+**Three detection rules, no invented recipes.** `WL-DOM-015` matches `srcUrn` only on a confirmed
+event object and stays MANUAL: the URN came from an HTML behavior, which needs a component
+redesign. `WL-DOM-016` matches `recordset` on a confirmed event and is UNSUPPORTED: IE data binding
+has no Chrome subsystem to map onto. `WL-JS-020` matches `setExpression`/`removeExpression` calls
+on a style object (`element.style` or an identifier ending in `style`) and is MANUAL: the expression
+ran continuously and needs to become an explicit style update. `window.event.*` forms stay with
+`WL-JS-003`, so the same reference is never counted twice.
+
+**Guards are part of the detectors.** `srcUrn`/`recordset` require an event-like parameter of the
+enclosing function or the implicit inline-handler `event`; `obj.recordset` and `obj.srcUrn` do not
+match. `setExpression` requires the call target to look like a style object, so a custom
+`custom.setExpression()` does not match; `myStyle.setExpression()` does.
+
+**Tests and mutations.** Four cases: `srcUrn` on a parameter and inline event with lookalikes and
+`window.event`; `recordset` on a parameter and inline event plus non-event objects; `setExpression`
+and `removeExpression` on style objects with lookalikes; and zh/ja rendering for all three. Removing
+the event-confirmed gate from `srcUrn` or `recordset`, the style-object gate from
+`setExpression`, or the `removeExpression` alternative each turned a test red. The bundled fixture
+contains none of the three APIs, so it stays at 12 files / 96 findings / 29 auto-convertible.
+
+**UI.** A demo file with one use of each API reports `WL-DOM-015` (manual), `WL-DOM-016`
+(unsupported) and `WL-JS-020` (manual) on the findings page; none appears as a migration item,
+which is the honest outcome.
+
+Suite: 268 tests.
+
+## 44. Fortieth increment — the lock queue becomes strictly FIFO
+
+The project lock was bounded but unfair: every waiter polled the same row, and whichever process
+happened to poll after a release won. That is acceptable for one user and unacceptable once a CLI
+and the UI compete for the same project, because the loser can starve across several attempts.
+
+**A ticket table makes the order explicit.** `project_lock_queue` stores `(project_id, token,
+owner_pid, ticket, created_at)`; a ticket is `MAX(ticket)+1` for the project, allocated inside the
+same `BEGIN IMMEDIATE` transaction that inserts it. `tryAcquireProjectLock` removes dead waiters,
+lets the current owner re-enter, reclaims a dead owner, and then checks the lowest live ticket: only
+that token may take the free lock. A caller without a ticket cannot jump a live waiter. When the
+lock is free but an earlier ticket exists, the failure carries `queued: true` and the waiter's
+pid/time, which `projectBusyReason` renders differently from "already running".
+
+**Tickets are removed on every exit path.** `acquireProjectLock` enqueues before its first attempt
+and removes the ticket in `finally`, so timeout and cancellation do not leave a stale waiter that
+blocks later callers; a successful acquire deletes the ticket as part of the grant. Scan start
+enqueues before its immediate attempt and drops the ticket when the wait is disabled. Dead waiters
+are also cleaned lazily on the next enqueue or acquire, and `releaseProjectLock` deletes any ticket
+for the owner token.
+
+**Tests and mutations.** Store-level tests cover strict order while the lock is free, a caller
+without a ticket being refused, dead-waiter cleanup, and the `queued` flag. Async tests cover two
+concurrent `acquireProjectLock` calls resolving in enqueue order and timeout/cancellation removing
+tickets. Disabling the lowest-ticket check, the dead-waiter cleanup, or the `finally` dequeue each
+turned a test red. A two-process script (parent holds, children B then C enqueue) printed
+`queue B,C`, then `B acquired` followed by `C acquired`, with C blocked until B released.
+
+**UI.** A waiting scan or migration still shows `waitingFor`; when another waiter is ahead while the
+lock is momentarily free, the text now says it is queued behind that operation instead of claiming
+an owner is running.
+
+Suite: 273 tests.

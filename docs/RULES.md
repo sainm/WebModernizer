@@ -1,18 +1,18 @@
 # Rule catalog
 
 Generated from the rule registry. The ruleDoc test fails if this file drifts from the source registry.
-Total: **58 rules**, **15 recipes**.
+Total: **62 rules**, **16 recipes**.
 
 ## Distribution by category
 
 | Category | Rules |
 | --- | --- |
 | JS_API | 5 |
-| DOM_API | 22 |
+| DOM_API | 25 |
 | BROWSER_BEHAVIOR | 10 |
 | ACTIVEX_VBSCRIPT | 4 |
+| CSS_COMPAT | 7 |
 | HTML_COMPAT | 6 |
-| CSS_COMPAT | 6 |
 | DYNAMIC_CODE | 5 |
 
 ## Automation levels
@@ -62,9 +62,13 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-DOM-012 | element.addBehavior | javascript | DOM_API | MEDIUM | UNSUPPORTED | — | behavior, removed-api |
 | WL-DOM-013 | document.namespaces | javascript | DOM_API | MEDIUM | UNSUPPORTED | — | namespace, removed-api |
 | WL-DOM-014 | element.styleSheet | javascript | DOM_API | MEDIUM | MANUAL | — | stylesheet, ie-only-api |
+| WL-DOM-015 | event.srcUrn | javascript | DOM_API | LOW | MANUAL | — | event, ie-only-api, behavior |
+| WL-DOM-016 | event.recordset | javascript | DOM_API | HIGH | UNSUPPORTED | — | event, ie-only-api, data-binding |
 | WL-BEH-005 | window.offscreenBuffering | javascript | BROWSER_BEHAVIOR | LOW | MANUAL | — | performance, ie-only-api |
 | WL-JS-017 | IE event handler signature | javascript | JS_API | HIGH | CONDITIONAL | RCP-HANDLER-EVENT-PARAM | event, window-event, handler |
 | WL-JS-018 | window.event in an inline handler attribute | javascript | DOM_API | HIGH | CONDITIONAL | RCP-INLINE-HANDLER-EVENT | event, window-event, inline-handler |
+| WL-JS-019 | IE event.button value | javascript | DOM_API | HIGH | MANUAL | RCP-EVENT-BUTTON | event, ie-only-api, mouse |
+| WL-JS-020 | style.setExpression | javascript | CSS_COMPAT | MEDIUM | MANUAL | — | css, ie-only-api, dynamic-css |
 | WL-HTML-001 | IE conditional comment | html | HTML_COMPAT | MEDIUM | MANUAL | — | conditional-comment, ie-only |
 | WL-HTML-002 | Legacy or IE-only element | html | HTML_COMPAT | MEDIUM | MANUAL | — | obsolete-element |
 | WL-HTML-003 | Obsolete script language attribute | html | HTML_COMPAT | LOW | SAFE | RCP-SCRIPT-LANGUAGE | obsolete-attribute |
@@ -100,8 +104,9 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-EXECSCRIPT | execScript -> indirect eval | CONDITIONAL | WL-JS-014 | Replaces window.execScript(code) with (0, eval)(code), which also evaluates in global scope. |
 | RCP-NAVIGATE | window.navigate -> location.assign | CONDITIONAL | WL-JS-016 | Replaces the IE navigation call with location.assign on the same argument. |
 | RCP-CSSRULES | styleSheet.rules -> cssRules | CONDITIONAL | WL-DOM-003 | Renames the property access on a stylesheet object. |
-| RCP-HANDLER-EVENT-PARAM | window.event handler -> event parameter | CONDITIONAL | WL-JS-017 | Adds an event parameter to a handler, replaces window.event (including in a synchronously called nested helper), and passes event first from inline on* calls while keeping existing parameters and arguments in order. |
+| RCP-HANDLER-EVENT-PARAM | window.event handler -> event parameter | CONDITIONAL | WL-JS-017 | Adds an event parameter to a handler, or reuses the first parameter of an addEventListener/on* handler, replaces window.event (including in a synchronously called nested helper), and passes event first from inline on* calls while keeping existing parameters and arguments in order. |
 | RCP-INLINE-HANDLER-EVENT | inline window.event -> event argument | CONDITIONAL | WL-JS-018 | Replaces window.event with the event argument that inline on* handlers already receive. |
+| RCP-EVENT-BUTTON | IE event.button literal -> Chrome value | CONDITIONAL | WL-JS-019 | Rewrites an equality comparison against the IE left (1) or middle (4) button to the Chrome value. |
 | RCP-SCRIPT-LANGUAGE | Remove obsolete script language attribute | SAFE | WL-HTML-003 | Deletes language="JavaScript" from the <script> tag; Chrome infers the type anyway. |
 | RCP-DROP-UA-COMPATIBLE | Remove X-UA-Compatible document mode | SAFE | WL-HTML-008 | Deletes the IE document-mode <meta> tag, which Chrome ignores. |
 | RCP-DROP-CSS-HACK | Drop IE CSS hack declaration | SAFE | WL-CSS-005 | Deletes the star/underscore declaration or the \9 value hack. |

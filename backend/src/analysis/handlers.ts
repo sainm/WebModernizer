@@ -39,6 +39,7 @@ export interface MigratableHandler {
   signatureEnd: number;
   inlineCallCount: number;
   paramCount: number;
+  reuseParam: string | null;
   windowEventNodes: JsNode[];
   windowEventStarts: number[];
 }
@@ -272,6 +273,25 @@ function scopeReadsEventIdentifier(fn: JsNode): boolean {
   return found;
 }
 
+function scopeBindsName(fn: JsNode, name: string): boolean {
+  const collect = (pattern: JsNode | null | undefined): boolean => {
+    const names = new Set<string>();
+    bindingIdentifiers(pattern, names);
+    return names.has(name);
+  };
+  for (const param of (fn.params as JsNode[] | undefined) ?? []) {
+    if (collect(param)) return true;
+  }
+  let found = false;
+  walkJs(fn, (node, _parent, ancestors) => {
+    if (found || nearestFunction(ancestors) !== fn) return;
+    if (node.type === 'VariableDeclarator' && collect(node.id as JsNode | undefined)) found = true;
+    else if (node.type === 'FunctionDeclaration' && collect(node.id as JsNode | undefined)) found = true;
+    else if (node.type === 'CatchClause' && collect(node.param as JsNode | undefined)) found = true;
+  });
+  return found;
+}
+
 function helperSynchronousUses(fn: JsNode, helper: JsNode): { ok: boolean; calls: number } {
   const id = helper.id as JsNode | undefined;
   if (!id || id.type !== 'Identifier') return { ok: false, calls: 0 };
@@ -293,7 +313,10 @@ function helperSynchronousUses(fn: JsNode, helper: JsNode): { ok: boolean; calls
   return { ok, calls };
 }
 
-function inspectHandlerBody(fn: JsNode): {
+function inspectHandlerBody(
+  fn: JsNode,
+  reuseParam: string | null = null,
+): {
   refs: JsNode[];
   nestedRef: boolean;
   hasArguments: boolean;
@@ -323,7 +346,7 @@ function inspectHandlerBody(fn: JsNode): {
     if (
       helper.async === true ||
       helper.generator === true ||
-      scopeReadsEventIdentifier(helper) ||
+      (reuseParam ? scopeBindsName(helper, reuseParam) : scopeReadsEventIdentifier(helper)) ||
       !uses.ok ||
       uses.calls === 0
     ) {
@@ -352,6 +375,8 @@ interface Candidate {
   headerStarts: Set<number>;
   inlineCallCount: number;
   hasReferenceRegistration: boolean;
+  eventFirstRegistration: boolean;
+  attachRegistration: boolean;
 }
 
 export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>): MigratableHandler[] {
@@ -398,6 +423,7 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
     headerStarts: Set<number>,
     inlineCallCount = 0,
     hasReferenceRegistration = false,
+    referenceKind: 'attach' | 'event-first' | null = null,
   ): void => {
     const start = fn.start ?? -1;
     if (start < 0) return;
@@ -406,6 +432,8 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
       headerStarts.forEach((value) => existing.headerStarts.add(value));
       existing.inlineCallCount += inlineCallCount;
       existing.hasReferenceRegistration = existing.hasReferenceRegistration || hasReferenceRegistration;
+      existing.eventFirstRegistration = existing.eventFirstRegistration || referenceKind === 'event-first';
+      existing.attachRegistration = existing.attachRegistration || referenceKind === 'attach';
       return;
     }
     candidates.set(start, {
@@ -417,6 +445,8 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
       headerStarts,
       inlineCallCount,
       hasReferenceRegistration,
+      eventFirstRegistration: referenceKind === 'event-first',
+      attachRegistration: referenceKind === 'attach',
     });
   };
 
@@ -463,6 +493,7 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
         new Set([handlerArg!.start ?? -1]),
         0,
         true,
+        method === 'attachEvent' ? 'attach' : 'event-first',
       );
       continue;
     }
@@ -476,6 +507,7 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
         new Set(),
         0,
         true,
+        method === 'attachEvent' ? 'attach' : 'event-first',
       );
     }
   }
@@ -489,11 +521,11 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
     if (!eventName) continue;
     const named = resolveNamed(right);
     if (named) {
-      addCandidate(named.fn, named.name, eventName, prop, named.container, new Set([right!.start ?? -1]), 0, true);
+      addCandidate(named.fn, named.name, eventName, prop, named.container, new Set([right!.start ?? -1]), 0, true, 'event-first');
       continue;
     }
     if (right && (right.type === 'FunctionExpression' || right.type === 'ArrowFunctionExpression')) {
-      addCandidate(right, '<anonymous>', eventName, prop, assignment.container, new Set(), 0, true);
+      addCandidate(right, '<anonymous>', eventName, prop, assignment.container, new Set(), 0, true, 'event-first');
     }
   }
 
@@ -527,7 +559,17 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
   const result: MigratableHandler[] = [];
   for (const candidate of candidates.values()) {
     const params = (candidate.node.params as JsNode[] | undefined) ?? [];
-    if (params.length > 0 && candidate.hasReferenceRegistration) continue;
+    const firstParam = params[0];
+    const reuseParam =
+      params.length > 0 &&
+      candidate.eventFirstRegistration &&
+      !candidate.attachRegistration &&
+      candidate.inlineCallCount === 0 &&
+      firstParam?.type === 'Identifier' &&
+      firstParam.name !== 'event'
+        ? String(firstParam.name)
+        : null;
+    if (params.length > 0 && candidate.hasReferenceRegistration && reuseParam === null) continue;
     const range = paramRange(ctx, candidate.node);
     if (!range) continue;
     if (handlerParamEdit(ctx, candidate.node) === null) continue;
@@ -538,7 +580,7 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
       if (uses.some((node) => !allowed.has(node.start ?? -1))) continue;
     }
 
-    const body = inspectHandlerBody(candidate.node);
+    const body = inspectHandlerBody(candidate.node, reuseParam);
     if (body.refs.length === 0 || body.nestedRef || body.hasArguments || body.eventBinding) continue;
     const refs = [...body.refs].sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
     result.push({
@@ -552,6 +594,7 @@ export function findMigratableHandlers(ctx: Pick<FileContext, 'parsed' | 'text'>
       signatureEnd: range.close + 1,
       inlineCallCount: candidate.inlineCallCount,
       paramCount: params.length,
+      reuseParam,
       windowEventNodes: refs,
       windowEventStarts: refs.map((node) => node.start ?? -1),
     });

@@ -50,7 +50,14 @@ export interface ProjectLockInfo {
 
 export type ProjectLockResult =
   | { ok: true; token: string; reclaimed: boolean }
-  | { ok: false; ownerPid: number; ownerToken: string; acquiredAt: string };
+  | { ok: false; ownerPid: number; ownerToken: string; acquiredAt: string; queued?: boolean };
+
+export interface ProjectLockQueueEntry {
+  token: string;
+  ownerPid: number;
+  ticket: number;
+  createdAt: string;
+}
 
 export interface ScanBatch {
   files: ScanFileRow[];
@@ -137,6 +144,16 @@ CREATE TABLE IF NOT EXISTS project_lock (
   owner_token TEXT NOT NULL,
   acquired_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS project_lock_queue (
+  project_id TEXT NOT NULL,
+  token TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  ticket INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, token)
+);
+CREATE INDEX IF NOT EXISTS idx_lock_queue_ticket ON project_lock_queue(project_id, ticket);
 
 CREATE TABLE IF NOT EXISTS scan_file (
   id TEXT PRIMARY KEY,
@@ -457,17 +474,84 @@ export class Store {
     return Number(result.changes) > 0;
   }
 
+  private cleanDeadWaiters(projectId: string): void {
+    const rows = this.db
+      .prepare('SELECT token, owner_pid FROM project_lock_queue WHERE project_id = ?')
+      .all(projectId) as Array<{ token: string; owner_pid: number }>;
+    const remove = this.db.prepare('DELETE FROM project_lock_queue WHERE project_id = ? AND token = ?');
+    for (const row of rows) {
+      if (!processAlive(row.owner_pid)) remove.run(projectId, row.token);
+    }
+  }
+
+  enqueueProjectLock(projectId: string, ownerPid: number, token: string): number {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.cleanDeadWaiters(projectId);
+      const existing = this.db
+        .prepare('SELECT ticket FROM project_lock_queue WHERE project_id = ? AND token = ?')
+        .get(projectId, token) as { ticket: number } | undefined;
+      if (existing) {
+        this.db.exec('COMMIT');
+        return existing.ticket;
+      }
+      const last = this.db
+        .prepare('SELECT MAX(ticket) AS ticket FROM project_lock_queue WHERE project_id = ?')
+        .get(projectId) as { ticket: number | null };
+      const ticket = (last.ticket ?? 0) + 1;
+      this.db
+        .prepare('INSERT INTO project_lock_queue (project_id, token, owner_pid, ticket, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(projectId, token, ownerPid, ticket, nowIso());
+      this.db.exec('COMMIT');
+      return ticket;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  dequeueProjectLock(projectId: string, token: string): boolean {
+    const result = this.db.prepare('DELETE FROM project_lock_queue WHERE project_id = ? AND token = ?').run(projectId, token);
+    return Number(result.changes) > 0;
+  }
+
+  listProjectLockQueue(projectId: string): ProjectLockQueueEntry[] {
+    const rows = this.db
+      .prepare('SELECT token, owner_pid, ticket, created_at FROM project_lock_queue WHERE project_id = ? ORDER BY ticket')
+      .all(projectId) as Array<{ token: string; owner_pid: number; ticket: number; created_at: string }>;
+    return rows.map((row) => ({ token: row.token, ownerPid: row.owner_pid, ticket: row.ticket, createdAt: row.created_at }));
+  }
+
   tryAcquireProjectLock(projectId: string, ownerPid: number, token: string): ProjectLockResult {
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.cleanDeadWaiters(projectId);
       const row = this.db
         .prepare('SELECT * FROM project_lock WHERE project_id = ?')
         .get(projectId) as { project_id: string; owner_pid: number; owner_token: string; acquired_at: string } | undefined;
-      if (row && row.owner_token !== token && processAlive(row.owner_pid)) {
+      if (row && row.owner_token === token) {
+        this.dequeueProjectLock(projectId, token);
+        this.db.exec('COMMIT');
+        return { ok: true, token, reclaimed: false };
+      }
+      if (row && processAlive(row.owner_pid)) {
         this.db.exec('COMMIT');
         return { ok: false, ownerPid: row.owner_pid, ownerToken: row.owner_token, acquiredAt: row.acquired_at };
       }
       const reclaimed = Boolean(row);
+      const first = this.db
+        .prepare('SELECT token, owner_pid, created_at FROM project_lock_queue WHERE project_id = ? ORDER BY ticket LIMIT 1')
+        .get(projectId) as { token: string; owner_pid: number; created_at: string } | undefined;
+      if (first && first.token !== token) {
+        this.db.exec('COMMIT');
+        return {
+          ok: false,
+          ownerPid: first.owner_pid,
+          ownerToken: first.token,
+          acquiredAt: first.created_at,
+          queued: true,
+        };
+      }
       const at = nowIso();
       if (row) {
         this.db
@@ -478,6 +562,7 @@ export class Store {
           .prepare('INSERT INTO project_lock (project_id, owner_pid, owner_token, acquired_at) VALUES (?, ?, ?, ?)')
           .run(projectId, ownerPid, token, at);
       }
+      this.dequeueProjectLock(projectId, token);
       this.db.exec('COMMIT');
       return { ok: true, token, reclaimed };
     } catch (err) {
@@ -488,6 +573,7 @@ export class Store {
 
   releaseProjectLock(projectId: string, token: string): boolean {
     const result = this.db.prepare('DELETE FROM project_lock WHERE project_id = ? AND owner_token = ?').run(projectId, token);
+    this.db.prepare('DELETE FROM project_lock_queue WHERE project_id = ? AND token = ?').run(projectId, token);
     return Number(result.changes) > 0;
   }
 

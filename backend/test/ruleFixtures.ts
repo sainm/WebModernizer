@@ -44,6 +44,8 @@ export const FIXTURES: Fixture[] = [
   { id: 'WL-DOM-012', file: 'r.js', code: 'el.addBehavior("#default#userData");' },
   { id: 'WL-DOM-013', file: 'r.js', code: 'document.namespaces.add("v", "urn:schemas-microsoft-com:vml");' },
   { id: 'WL-DOM-014', file: 'r.js', code: 'var sheet = el.styleSheet;' },
+  { id: 'WL-DOM-015', file: 'r.js', code: 'function f(event) { return event.srcUrn; }' },
+  { id: 'WL-DOM-016', file: 'r.js', code: 'function f(event) { return event.recordset; }' },
   { id: 'WL-BEH-005', file: 'r.js', code: 'window.offscreenBuffering = true;' },
   {
     id: 'WL-JS-017',
@@ -54,6 +56,16 @@ export const FIXTURES: Fixture[] = [
     id: 'WL-JS-018',
     file: 'r.html',
     code: '<html><body><input type="button" onclick="window.event.cancelBubble = true;" /></body></html>',
+  },
+  {
+    id: 'WL-JS-019',
+    file: 'r.js',
+    code: 'function onClick(event) { if (event.button == 1) { return; } }',
+  },
+  {
+    id: 'WL-JS-020',
+    file: 'r.js',
+    code: "el.style.setExpression('width', '1px');",
   },
 
   { id: 'WL-HTML-001', file: 'r.html', code: '<html><body><!--[if IE]><p>only ie</p><![endif]--></body></html>' },

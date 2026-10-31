@@ -80,7 +80,12 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-JS-017.inline': 'IE 事件处理器 {handler} 使用了 window.event（{windowEventCount} 处；内联调用 {inlineCallCount} 次）',
     'rules.WL-JS-017.inlineCalls': 'IE 事件处理器 {handler} 被 {inlineCallCount} 处内联处理器调用，并使用 window.event',
     'rules.WL-JS-017.inlineCallSite': '内联 {attribute} 处理器调用 {handler}(...) 时未传入 event',
+    'rules.WL-JS-017.reuse': 'IE 事件处理器 {handler} 已通过 {eventParam} 接收事件，但仍在读取 window.event（{windowEventCount} 处）',
     'rules.WL-JS-018': '内联 {attribute} 处理器直接读取 window.event（{windowEventCount} 处）',
+    'rules.WL-JS-019': '读取 IE 事件按键编码 event.button（Chrome 为 0/1/2）',
+    'rules.WL-DOM-015': '读取 IE 专有的 {objectName}.srcUrn',
+    'rules.WL-DOM-016': '读取 IE 数据绑定属性 {objectName}.recordset',
+    'rules.WL-JS-020': '调用 IE 专有的 {objectText}.{methodName}()',
   },
   ja: {
     'rules.WL-JS-001': 'IE 専用の attachEvent("{eventName}", ...) でイベントを登録しています',
@@ -148,7 +153,12 @@ export const RULE_MESSAGES: Record<Exclude<Locale, 'en'>, Record<string, string>
     'rules.WL-JS-017.inline': 'IE イベントハンドラ {handler} が window.event を使用しています（{windowEventCount} 箇所、インライン呼び出し {inlineCallCount} 回）',
     'rules.WL-JS-017.inlineCalls': 'IE イベントハンドラ {handler} は {inlineCallCount} 箇所のインラインハンドラから呼ばれ、window.event を使用しています',
     'rules.WL-JS-017.inlineCallSite': 'インライン {attribute} ハンドラが {handler}(...) を event 引数なしで呼び出しています',
+    'rules.WL-JS-017.reuse': 'IE イベントハンドラ {handler} は {eventParam} で event を受け取っていますが、window.event を参照しています（{windowEventCount} 箇所）',
     'rules.WL-JS-018': 'インライン {attribute} ハンドラが window.event を直接参照しています（{windowEventCount} 箇所）',
+    'rules.WL-JS-019': 'IE の event.button 値を参照しています（Chrome は 0/1/2）',
+    'rules.WL-DOM-015': 'IE 専用の {objectName}.srcUrn を参照しています',
+    'rules.WL-DOM-016': 'IE データバインドの {objectName}.recordset を参照しています',
+    'rules.WL-JS-020': 'IE 専用の {objectText}.{methodName}() を呼び出しています',
   },
 };
 

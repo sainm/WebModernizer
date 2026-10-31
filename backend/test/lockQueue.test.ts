@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MigrationService } from '../src/core/migration.js';
 import { ScanManager } from '../src/core/orchestrator.js';
+import { acquireProjectLock } from '../src/core/projectLock.js';
 import { defaultProjectConfig } from '../src/core/scanner.js';
 import type { ScanStatus, ScanTask } from '../src/model/types.js';
 import { ruleSignature } from '../src/recipes/registry.js';
@@ -176,5 +177,54 @@ describe('bounded project lock waits', () => {
     expect(reclaimed?.status).toBe('FAILED');
     expect(reclaimed?.waitingFor).toBeNull();
     expect(reclaimed?.errorSummary).toContain('waiting for the project lock');
+  });
+
+  it('grants concurrent waiters in ticket order', async () => {
+    const { store, project } = await setup(0);
+    expect(store.tryAcquireProjectLock(project.id, process.pid, 'holder').ok).toBe(true);
+    const order: string[] = [];
+    const b = acquireProjectLock(store, project.id, process.pid, 'b', { waitMs: 5000, pollMs: 10 }).then((outcome) => {
+      if (outcome.result.ok) order.push('b');
+      return outcome;
+    });
+    await new Promise((done) => setTimeout(done, 40));
+    const c = acquireProjectLock(store, project.id, process.pid, 'c', { waitMs: 5000, pollMs: 10 }).then((outcome) => {
+      if (outcome.result.ok) order.push('c');
+      return outcome;
+    });
+    await new Promise((done) => setTimeout(done, 40));
+
+    store.releaseProjectLock(project.id, 'holder');
+    const first = await b;
+    expect(first.result.ok).toBe(true);
+    expect(store.listProjectLockQueue(project.id).map((entry) => entry.token)).toContain('c');
+
+    store.releaseProjectLock(project.id, 'b');
+    const second = await c;
+    expect(second.result.ok).toBe(true);
+    expect(order).toEqual(['b', 'c']);
+    store.releaseProjectLock(project.id, 'c');
+  });
+
+  it('removes timed-out and cancelled waiters from the queue', async () => {
+    const { store, project } = await setup(0);
+    expect(store.tryAcquireProjectLock(project.id, process.pid, 'holder').ok).toBe(true);
+
+    const timedOut = await acquireProjectLock(store, project.id, process.pid, 'late', { waitMs: 60, pollMs: 10 });
+    expect(timedOut.timedOut).toBe(true);
+    expect(store.listProjectLockQueue(project.id).map((entry) => entry.token)).not.toContain('late');
+
+    const cancelled = await acquireProjectLock(store, project.id, process.pid, 'cancel-me', {
+      waitMs: 1000,
+      pollMs: 10,
+      isCancelled: () => true,
+    });
+    expect(cancelled.cancelled).toBe(true);
+    expect(store.listProjectLockQueue(project.id).map((entry) => entry.token)).not.toContain('cancel-me');
+
+    store.releaseProjectLock(project.id, 'holder');
+    const next = await acquireProjectLock(store, project.id, process.pid, 'next', { waitMs: 500, pollMs: 10 });
+    expect(next.result.ok).toBe(true);
+    store.releaseProjectLock(project.id, 'next');
   });
 });

@@ -205,6 +205,36 @@ export function createServer(store: Store): ServerContext {
     res.json({ ...project, scans: store.listScans(project.id, 50) });
   });
 
+  /**
+   * Remaining findings per completed scan, for the burn-down. Interrupted scans are excluded: a
+   * cancelled run has only counted the files it reached, so it would read as a cliff that never
+   * happened.
+   */
+  app.get('/api/projects/:id/trend', (req, res) => {
+    const project = store.getProject(req.params.id);
+    if (!project) {
+      res.status(404).json({ error: 'project not found' });
+      return;
+    }
+    const limit = Math.min(Math.max(parseIntParam(req.query.limit, 12), 2), 50);
+    const completed = store
+      .listScans(project.id, limit)
+      .filter((scan) => scan.status === 'COMPLETED' || scan.status === 'COMPLETED_WITH_WARNINGS')
+      .reverse(); // oldest first: the chart reads left to right in time
+    const levels = store.countFindingsByLevel(completed.map((scan) => scan.id));
+    res.json({
+      points: completed.map((scan) => ({
+        scanId: scan.id,
+        status: scan.status,
+        at: scan.completedAt ?? scan.createdAt,
+        findings: scan.findingCount,
+        resolved: scan.resolvedCount,
+        added: scan.addedCount,
+        byLevel: levels.get(scan.id) ?? { SAFE: 0, CONDITIONAL: 0, MANUAL: 0, UNSUPPORTED: 0 },
+      })),
+    });
+  });
+
   app.patch(
     '/api/projects/:id',
     asyncHandler((req, res) => {

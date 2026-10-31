@@ -1007,3 +1007,41 @@ lost both incremental reuse *and* the new delta; the parameter is now required, 
 call sites pass the real signature like production does.
 
 Suite: 182 tests.
+
+---
+
+## 26. Twenty-second increment — the trend as a line
+
+§25 gave every scan a delta. A delta is still a pair of numbers; what a migration needs is the
+shape of the remaining work over time. The project page now draws it.
+
+`GET /api/projects/:id/trend?limit=12` returns one point per **completed** scan, oldest first, with
+the finding count split by migration level. Interrupted scans are excluded on purpose: a cancelled
+run only counted the files it reached, so including it would draw a cliff that never happened.
+
+The split comes from one query (`GROUP BY scan_task_id, migration_level`) rather than one read per
+scan — a dozen scans would otherwise be a dozen full table reads for a chart. Nothing is
+denormalised onto the scan row, so the chart cannot drift from the findings it claims to summarise.
+
+Two lines: findings that need a human, and findings a recipe can still convert. Both are counts of
+what is *in the code*, not of statuses — accepting a finding (ignore rule) does not move them, and
+the card says so in as many words, because a burn-down that dropped when someone clicked "ignore"
+would be measuring paperwork rather than progress.
+
+### The screenshot again
+
+The first render letterboxed the chart into the left two-thirds of its card: a fixed `height`
+with `width: 100%` makes the browser scale the viewBox to fit the *height*, leaving the rest of the
+width empty. The top y-axis label was clipped by the same fixed geometry. Both were invisible in
+the dev tools and obvious the moment the page was rendered. The component now sizes itself with
+`width: 100% / height: auto` against a 880×200 viewBox and scales cleanly.
+
+That is the third defect this project has found by looking at a rendered page after the tests were
+green — after "0 / 11 — 0 %" (§25) and the all-green phase list (§19).
+
+### Tests
+
+One HTTP test: two completed scans produce two points, oldest first, every point's level breakdown
+sums to the finding count the scan recorded, and no point carries a non-terminal status.
+
+Suite: 183 tests.

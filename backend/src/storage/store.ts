@@ -696,6 +696,28 @@ export class Store {
     return rows.map(mapFinding);
   }
 
+  /**
+   * Finding counts per migration level for several scans at once. The trend chart needs this for
+   * a dozen scans; asking for each scan separately would be a dozen full reads.
+   */
+  countFindingsByLevel(scanIds: string[]): Map<string, Record<MigrationLevel, number>> {
+    const out = new Map<string, Record<MigrationLevel, number>>();
+    if (scanIds.length === 0) return out;
+    const placeholders = scanIds.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `SELECT scan_task_id, migration_level, COUNT(*) AS c FROM finding
+         WHERE scan_task_id IN (${placeholders}) GROUP BY scan_task_id, migration_level`,
+      )
+      .all(...scanIds) as unknown as Array<{ scan_task_id: string; migration_level: MigrationLevel; c: number }>;
+    for (const row of rows) {
+      const entry = out.get(row.scan_task_id) ?? { SAFE: 0, CONDITIONAL: 0, MANUAL: 0, UNSUPPORTED: 0 };
+      entry[row.migration_level] = row.c;
+      out.set(row.scan_task_id, entry);
+    }
+    return out;
+  }
+
   listAllFindings(scanTaskId: string): AnalysisFinding[] {
     const rows = this.db
       .prepare('SELECT * FROM finding WHERE scan_task_id = ? ORDER BY file_path, start_offset')

@@ -273,6 +273,65 @@ export function BarList({
 
 const DONUT_COLORS = ['#c0271d', '#d98216', '#2456d6', '#8b93a3'];
 
+/**
+ * A minimal multi-series line chart. Values share the same x positions, so the caller passes one
+ * array per series rather than points with coordinates — the only thing a burn-down needs.
+ */
+export function LineChart({
+  series,
+  height = 200,
+  ariaLabel,
+}: {
+  series: Array<{ label: string; color: string; values: number[]; suffix?: string }>;
+  /** Height of the drawing area in viewBox units; the chart scales to the container width. */
+  height?: number;
+  ariaLabel?: string;
+}) {
+  // The viewBox is wider than tall and the element is sized with width: 100% / height: auto, so
+  // the chart fills the card instead of being letterboxed by a fixed pixel height.
+  const width = 880;
+  const pad = { top: 16, right: 16, bottom: 10, left: 34 };
+  const count = Math.max(2, ...series.map((line) => line.values.length));
+  const max = Math.max(1, ...series.flatMap((line) => line.values));
+  const x = (index: number): number => pad.left + (index * (width - pad.left - pad.right)) / (count - 1);
+  const y = (value: number): number => pad.top + (1 - value / max) * (height - pad.top - pad.bottom);
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={ariaLabel ?? 'trend'}
+      style={{ display: 'block', width: '100%', height: 'auto' }}
+    >
+      {[0, max / 2, max].map((value) => (
+        <g key={value}>
+          <line x1={pad.left} x2={width - pad.right} y1={y(value)} y2={y(value)} stroke="var(--border)" strokeWidth={1} />
+          <text x={pad.left - 6} y={y(value) + 3} textAnchor="end" fontSize={9} fill="var(--text-3)">
+            {Math.round(value)}
+          </text>
+        </g>
+      ))}
+      {series.map((line) => (
+        <g key={line.label}>
+          <polyline
+            fill="none"
+            stroke={line.color}
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            points={line.values.map((value, index) => `${x(index)},${y(value)}`).join(' ')}
+          />
+          {line.values.map((value, index) => (
+            <circle key={index} cx={x(index)} cy={y(value)} r={2.6} fill={line.color}>
+              <title>{`${line.label}: ${value}${line.suffix ?? ''}`}</title>
+            </circle>
+          ))}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 export function Donut({
   slices,
   total,

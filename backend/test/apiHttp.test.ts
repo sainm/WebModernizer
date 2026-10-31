@@ -114,6 +114,38 @@ describe('api surface', () => {
   });
 });
 
+describe('project trend', () => {
+  it('returns one point per completed scan, oldest first', async () => {
+    const projects = await json<{ items: Array<{ id: string }> }>(await fetch(`${base}/api/projects`));
+    const projectId = projects.items[0].id;
+
+    // A second scan of the same tree: the first one came from beforeAll.
+    await json(await fetch(`${base}/api/projects/${projectId}/scans`, { method: 'POST' }));
+    for (let i = 0; i < 300; i += 1) {
+      const scans = await json<{ items: Array<{ status: string }> }>(await fetch(`${base}/api/scans?projectId=${projectId}`));
+      if (scans.items.every((scan) => !['RUNNING', 'QUEUED'].includes(scan.status))) break;
+      await new Promise((done) => setTimeout(done, 50));
+    }
+
+    const trend = await json<{
+      points: Array<{ scanId: string; at: string; findings: number; byLevel: Record<string, number>; status: string }>;
+    }>(await fetch(`${base}/api/projects/${projectId}/trend`));
+
+    expect(trend.points.length).toBeGreaterThanOrEqual(2);
+    for (const point of trend.points) {
+      expect(['COMPLETED', 'COMPLETED_WITH_WARNINGS']).toContain(point.status);
+    }
+    // Oldest first, so the chart reads left to right in time.
+    const times = trend.points.map((point) => Date.parse(point.at));
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+    // The level breakdown must add up to the finding count the scan recorded.
+    for (const point of trend.points) {
+      const sum = Object.values(point.byLevel).reduce((acc, value) => acc + value, 0);
+      expect(sum).toBe(point.findings);
+    }
+  });
+});
+
 describe('cross-origin policy', () => {
   it('does not grant a remote page access to scan data', async () => {
     const res = await fetch(`${base}/api/scans`, { headers: { origin: 'https://evil.example' } });

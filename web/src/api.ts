@@ -213,6 +213,16 @@ export interface MigrationPlan {
   warnings: string[];
 }
 
+export interface TrendPoint {
+  scanId: string;
+  status: ScanTask['status'];
+  at: string;
+  findings: number;
+  resolved: number;
+  added: number;
+  byLevel: Record<MigrationLevel, number>;
+}
+
 export interface MigrationExecution {
   id: string;
   projectId: string;
@@ -402,7 +412,9 @@ export const api = {
 
   listProjects: () => request<{ items: Project[] }>('/projects'),
   getProject: (id: string) => request<Project>(`/projects/${id}`),
-  createProject: (body: { name: string; rootPath: string; config?: Partial<ProjectConfig> }) =>
+
+  trend: (projectId: string, limit = 12) =>
+    request<{ points: TrendPoint[] }>(`/projects/${projectId}/trend?limit=${limit}`),  createProject: (body: { name: string; rootPath: string; config?: Partial<ProjectConfig> }) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify(body) }),
   updateProject: (id: string, body: { name?: string; rootPath?: string; config?: Partial<ProjectConfig> }) =>
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),

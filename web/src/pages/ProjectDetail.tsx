@@ -3,13 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api, formatDuration, formatTime, type IgnoreImpact } from '../api';
 import { useAsync } from '../hooks';
 import { useI18n } from '../i18n';
-import { Card, Empty, ErrorBox, Loading, PageHead, Stat } from '../components/ui';
+import { Card, Empty, ErrorBox, LineChart, Loading, PageHead, Stat } from '../components/ui';
 
 export default function ProjectDetail() {
   const { projectId } = useParams();
   const { t, scanStatus } = useI18n();
   const navigate = useNavigate();
   const project = useAsync(() => api.getProject(projectId as string), [projectId]);
+  const trend = useAsync(
+    () => (projectId ? api.trend(projectId) : Promise.resolve({ points: [] as Array<never> })),
+    [projectId],
+  );
   const ignoreRules = useAsync(
     () => (projectId ? api.listIgnoreRules(projectId) : Promise.resolve({ items: [] })),
     [projectId],
@@ -127,6 +131,49 @@ export default function ProjectDetail() {
         <Stat label={t('scans.started')} value={scans[0] ? formatTime(scans[0].startedAt ?? scans[0].createdAt) : '—'} small />
         <Stat label={t('scans.duration')} value={scans[0] ? formatDuration(scans[0].startedAt, scans[0].completedAt) : '—'} small />
       </div>
+
+      {trend.data && trend.data.points.length >= 2 ? (
+        <div style={{ marginBottom: 16 }}>
+          <Card
+            title={t('project.trend')}
+            actions={
+              <span className="row" style={{ gap: 12, fontSize: 11 }}>
+                <span className="row" style={{ gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--medium)' }} />
+                  <span className="muted">{t('project.trendManual')}</span>
+                </span>
+                <span className="row" style={{ gap: 4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--ok)' }} />
+                  <span className="muted">{t('project.trendConvertible')}</span>
+                </span>
+              </span>
+            }
+          >
+            <LineChart
+              ariaLabel={t('project.trend')}
+              series={[
+                {
+                  label: t('project.trendManual'),
+                  color: 'var(--medium)',
+                  values: trend.data.points.map((point) => point.byLevel.MANUAL),
+                },
+                {
+                  label: t('project.trendConvertible'),
+                  color: 'var(--ok)',
+                  values: trend.data.points.map((point) => point.byLevel.SAFE + point.byLevel.CONDITIONAL),
+                },
+              ]}
+            />
+            <div className="row wrap" style={{ marginTop: 6, fontSize: 11 }}>
+              <span className="muted grow">
+                {formatTime(trend.data.points[0].at)} → {formatTime(trend.data.points[trend.data.points.length - 1].at)} ·{' '}
+                {t('project.trendPoints', { count: trend.data.points.length })}
+              </span>
+              <span className="muted">{t('project.trendHint')}</span>
+            </div>
+          </Card>
+        </div>
+      ) : null}
 
       <div className="grid-2">
         <Card title={t('project.config')}>

@@ -186,6 +186,10 @@ explicit reason; convert the file to UTF-8 (or migrate it by hand) and rescan.
 **Large-file and binary handling is coarse.** Files above 2 MB are skipped with a recorded reason;
 binary detection is a NUL-byte probe over the first 8 KB.
 
+**The burn-down counts code, not triage.** Ignoring a finding does not lower the line — the pattern
+is still in the file. Interrupted scans are excluded from the chart, so a cancelled run does not
+look like a cliff.
+
 **The trend is only recorded when the rule set is unchanged.** A scan after a rule change shows no
 delta, because the two numbers would not be comparable. Comparing any two scans by hand (the Compare
 page) still works; it says what it is comparing.

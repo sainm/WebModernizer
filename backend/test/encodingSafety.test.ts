@@ -159,17 +159,20 @@ describe('encoding-safe migrations', () => {
 
   it('blocks a file whose encoding has no encoder, and leaves the bytes alone', async () => {
     const target = 'js/exotic.js';
+    // x-mac-cyrillic is decodable by this runtime but has no iconv-lite encoder, which is exactly
+    // the case the guard exists for. (x-user-defined cannot be used here: the runtime cannot
+    // decode it at all, so the scan never produces a finding to block.)
     const bytes = encodeFixture('shift_jis', SOURCE);
     const { projectDir, service, scanId, store, findingFor } = await setup(
       { [target]: { bytes } },
-      { forceEncoding: 'x-user-defined' },
+      { forceEncoding: 'x-mac-cyrillic' },
     );
     const file = join(projectDir, target);
-    expect(store.getScanFile(scanId, target)?.encoding).toBe('x-user-defined');
+    expect(store.getScanFile(scanId, target)?.encoding).toBe('x-mac-cyrillic');
 
     const finding = findingFor(target);
     const plan = service.preview({ scanTaskId: scanId, findingIds: [finding.id] });
-    expect(plan.items[0].encoding).toBe('x-user-defined');
+    expect(plan.items[0].encoding).toBe('x-mac-cyrillic');
     expect(plan.items[0].applicable).toBe(false);
     expect(plan.items[0].blockedReasons.join(' ')).toContain('no encoder');
 
@@ -177,6 +180,20 @@ describe('encoding-safe migrations', () => {
     expect(result.ok).toBe(false);
     expect(result.executions).toHaveLength(0);
     expect(readFileSync(file).equals(bytes)).toBe(true);
+  });
+
+  it('fails the whole scan when the forced encoding cannot be decoded at all', async () => {
+    const { store, scanId } = await setup({ 'js/a.js': { bytes: Buffer.from(SOURCE, 'utf8') } }, {
+      forceEncoding: 'x-user-defined',
+    });
+
+    const scan = store.getScan(scanId);
+    expect(scan?.status).toBe('FAILED');
+    // The message has to name the setting, not the files: "cannot read file" would send the user
+    // looking at a source tree that is perfectly fine.
+    expect(scan?.errorSummary).toContain('forceEncoding');
+    expect(scan?.errorSummary).toContain('x-user-defined');
+    expect(store.listScanFiles(scanId)).toHaveLength(0);
   });
 
   it('keeps the byte-order mark and the surrounding text when migrating a UTF-8 file', async () => {

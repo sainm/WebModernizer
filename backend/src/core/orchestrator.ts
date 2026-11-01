@@ -11,7 +11,7 @@ import { SCAN_PHASES } from '../model/types.js';
 import { makeSourceFile, parseSourceFile } from '../parser/index.js';
 import type { FindingStatusUpdate, Store, ScanFileRow } from '../storage/store.js';
 import { discoverFiles, modulePathOf, type DiscoveryResult } from './scanner.js';
-import { decodeBuffer } from './textDecode.js';
+import { DEFAULT_ENCODINGS, UnsupportedEncodingError, decodeBuffer, isSupportedEncoding } from './textDecode.js';
 import { writeScanReport } from './report.js';
 import { IGNORE_NOTE_PREFIX, findIgnoreMatch, ignoreNote } from './ignoreRules.js';
 import { compareFindings } from './compare.js';
@@ -502,6 +502,9 @@ export class ScanManager {
         reused: false,
       };
     } catch (err) {
+      // A forced-encoding problem belongs to the project setting, so it is reported as a decode
+      // problem that names the encoding rather than as a file that could not be read.
+      const unsupported = err instanceof UnsupportedEncodingError;
       return {
         entry,
         hash: '',
@@ -509,7 +512,14 @@ export class ScanManager {
         language: 'javascript',
         status: 'FAILED',
         findings: [],
-        problems: [{ filePath: entry.relPath, phase: 'READ', message: `Cannot read file: ${(err as Error).message}`, recovered: false }],
+        problems: [
+          {
+            filePath: entry.relPath,
+            phase: unsupported ? 'DECODE' : 'READ',
+            message: unsupported ? (err as Error).message : `Cannot read file: ${(err as Error).message}`,
+            recovered: false,
+          },
+        ],
         facts: null,
         reused: false,
       };
@@ -702,6 +712,16 @@ export class ScanManager {
     try {
       /* ---------------- phase 1: discovery ---------------- */
       this.log(runner, scanId, 'info', 'FILE_DISCOVERY', `Scanning ${task.rootPath}`);
+      // A project-level encoding override this runtime cannot decode is not a per-file problem:
+      // without this check every file would be reported as "cannot be read", which points the
+      // user at their source tree instead of at the one setting that is wrong.
+      if (config.forceEncoding && !isSupportedEncoding(config.forceEncoding)) {
+        throw new Error(
+          `forceEncoding "${config.forceEncoding}" is not an encoding this runtime can decode. ` +
+            `Clear it in the project settings, or use one of: ${DEFAULT_ENCODINGS.join(', ')}.`,
+        );
+      }
+
       discovery = discoverFiles(task.rootPath, config);
       const discoveredFiles = discovery.files;
       for (const warning of discovery.warnings) {

@@ -69,6 +69,8 @@ All notable changes to WebLift are recorded here. The format follows
 
 ### Fixed
 
+- A `forceEncoding` value this runtime cannot decode now fails the scan with a message naming the
+  setting, instead of reporting `COMPLETED_WITH_WARNINGS` while marking every file "cannot read".
 - A scan interrupted by SIGKILL no longer leaves the project locked or the persisted findings
   inconsistent.
 - Rule documentation drift is caught by a test that compares `docs/RULES.md` with the source

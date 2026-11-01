@@ -1948,3 +1948,34 @@ the suite is 289 tests.
 the preview injects `event` at the signature and rewrites both bodies, leaving the calls untouched.
 
 Suite: 289 tests.
+
+---
+
+## 50. Forty-sixth increment — a bad project setting blamed the source tree
+
+The suite arrived red, from one test in `encodingSafety.test.ts` that had been written against an
+assumption the runtime does not hold: `x-user-defined` as a forced encoding. Node's `TextDecoder`
+rejects that label outright, so `decodeBuffer` threw, and `analyzeInProcess`'s catch turned the
+throw into `Cannot read file: …` with `status: FAILED` and encoding `utf-8`.
+
+The result was a scan that reported **`COMPLETED_WITH_WARNINGS`** while every file in it was
+unusable, and an error message that pointed at the user's source tree instead of at the one setting
+that was wrong. Verified by mutation: drop the new pre-check and the test fails with
+`expected 'COMPLETED_WITH_WARNINGS' to be 'FAILED'`.
+
+Three changes, in the order they matter:
+
+- **`decodeBuffer` refuses instead of falling back.** A forced encoding the runtime cannot decode
+  now throws `UnsupportedEncodingError`. Quietly decoding as UTF-8 would have mis-read every file
+  in the project and called it success.
+- **The scan validates the override once, before discovery.** A project-level setting is not a
+  per-file problem, so it fails the run with a message naming `forceEncoding`, the offending value
+  and the encodings that do work — instead of 5 000 identical "cannot read" rows.
+- **Per-file defence keeps the distinction.** If the error ever reaches `analyzeInProcess`, the
+  problem is recorded with `phase: 'DECODE'` and the class's own message, not as a read failure.
+
+The test itself was the other half of the bug: `x-mac-cyrillic` is decodable but has no iconv-lite
+encoder, which is the case the "no encoder" guard actually exists for. The old fixture could never
+reach it.
+
+Suite: 290 tests.

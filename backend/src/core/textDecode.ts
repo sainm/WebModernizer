@@ -70,6 +70,17 @@ export function normalizeEncoding(name: string): string {
   return n;
 }
 
+/**
+ * A forced encoding the runtime cannot decode. This is a project setting, not a property of any
+ * one file, so callers should report it once instead of blaming every file it touches.
+ */
+export class UnsupportedEncodingError extends Error {
+  constructor(readonly encoding: string) {
+    super(`Encoding "${encoding}" is not one this runtime can decode.`);
+    this.name = 'UnsupportedEncodingError';
+  }
+}
+
 export function isSupportedEncoding(name: string): boolean {
   const normalized = normalizeEncoding(name);
   if ((DEFAULT_ENCODINGS as readonly string[]).includes(normalized)) return true;
@@ -205,6 +216,9 @@ export function decodeBuffer(buffer: Buffer, options: DecodeOptions = {}): Decod
 
   if (options.forceEncoding) {
     const encoding = normalizeEncoding(options.forceEncoding);
+    // Falling back to UTF-8 here would decode every file of the project wrongly and report it as
+    // success. The setting is simply unusable, and saying so is the only honest answer.
+    if (!isSupportedEncoding(encoding)) throw new UnsupportedEncodingError(options.forceEncoding);
     const text = decodeWith(buffer, encoding, false);
     return { text, encoding, source: 'META', replacementCount: countReplacement(text), confidence: 1 };
   }

@@ -86,19 +86,19 @@ would swallow 20 findings is visible as such. That count is computed against the
 scan; creating the rule does not retro-apply it, so the visible result still arrives on the next
 scan (the dialog offers a rescan button).
 
-**Seventeen recipes, and "manual" covers three different situations.** Shipped recipes:
+**Eighteen recipes, and "manual" covers three different situations.** Shipped recipes:
 `attachEvent`, `detachEvent`, `srcElement`, `cancelBubble`, `returnValue`, `fireEvent`,
 `execScript`, the obsolete `<script language>` attribute, the `X-UA-Compatible` meta tag, IE CSS
 hack removal, renaming a `-ms-` property whose value syntax matches the standard one, the
-function-level and inline handler rewrites, `event.button` comparisons, and IE filter conversion
-(alpha-only opacity and simple two-color gradients). Everything else is reported as MANUAL or
-UNSUPPORTED, but MANUAL is not one thing:
+function-level and inline handler rewrites, `event.button` comparisons, IE filter conversion
+(alpha-only opacity and simple two-color gradients), and `zoom: 1` removal. Everything else is
+reported as MANUAL or UNSUPPORTED, but MANUAL is not one thing:
 
 | Situation | Fixture count | What it really means |
 | --- | --- | --- |
 | Recipe exists, this occurrence fails its preconditions | 6 | Fix the surrounding code first — most of these are `window.event.returnValue = …` outside an eligible handler. |
 | Mechanical rewrite exists, recipe not implemented yet | 4 | Labelled "automatable later" in the UI with the reason. Remaining: `createEventObject`, `document.selection.createRange()`, and the `-ms-` properties whose value syntax differs (`-ms-flex`, `-ms-writing-mode`). |
-| Needs human judgement or a product decision | 44 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
+| Needs human judgement or a product decision | 41 | `showModalDialog` control flow, UA-sniff branch semantics, ActiveX/VBScript capability gaps, `.htc` behaviours, generated code. |
 
 The first version of this tool collapsed all three into one MANUAL badge, which made real
 opportunities look impossible. The dashboard now reports "automatable later" separately.
@@ -165,6 +165,11 @@ colors; 8-digit ARGB colors, extra stops, shadows and combined filter lists stay
 refuses a second `opacity`, any existing `background-image`, or a `background` shorthand declared
 after the filter. `opacity` creates a stacking context, and IE painted gradients over the existing
 background, so layered content and the fallback color must be checked.
+
+**`zoom: 1` removal is deliberately narrow.** Chrome implements zoom, but the literal value 1 is a
+no-op; in IE-era code it usually existed only to trigger hasLayout. The recipe deletes only `zoom: 1`
+or `1.0`, including with `!important`, and refuses fractional, percentage or larger values that may
+actually scale. Declarations inside inline style attributes are not edited.
 
 **A transaction covers one execute() call, nothing more.** One call is one session: every file
 it touches is prepared (hash check, backup, in-memory edit, re-parse) before anything is written,

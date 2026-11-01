@@ -1885,3 +1885,32 @@ reports three findings on the findings page with their declaration text highligh
 unsupported, and nothing appears as a migration item.
 
 Suite: 283 tests.
+
+## 48. Forty-fourth increment — deleting the zoom: 1 hasLayout trigger
+
+`zoom` was reported as MANUAL with advice to delete it when the value is 1, but the tool did not do
+it. The fixture has three `zoom: 1` declarations; in Chrome the value is a no-op, so deletion is
+safe, while any other value may genuinely scale layout.
+
+**Classification is by literal value.** `WL-CSS-006` (1.2.0) marks only a trimmed `1` or `1.0`
+as SAFE; fractional, percentage and larger values stay MANUAL. The star-prefixed hack is still
+reported by `WL-CSS-005` only, never as zoom. Inline style findings remain MANUAL through the
+existing inline gate.
+
+**The recipe deletes the declaration.** `RCP-DROP-ZOOM-ONE` re-reads the declaration, verifies the
+property and literal value, and reuses the same `deleteDeclaration` range logic as the IE-hack
+recipe, so an own-line declaration removes the whole line and a shared line keeps its neighbours.
+`!important` disappears with the declaration. The caveats state that fractional values stay manual
+and inline attributes are not edited.
+
+**Tests and mutations.** Two cases: level mapping across `1`, `1.0`, `1.5`, `100%` and inline
+`style="zoom: 1"`, with direct recipe preconditions checked; and a full migration that removes the
+two convertible declarations while keeping the rule's other properties and the `1.5` declaration.
+Disabling the rule's literal-value classification or the recipe's value guard each turned a test
+red. The fixture moves from 32 to 35 auto-convertible (SAFE 10 -> 13, CONDITIONAL 22) and from 54 to
+51 manual (judgement 44 -> 41); the catalog is 62 rules / 18 recipes and the suite is 285 tests.
+
+**UI.** A demo stylesheet with `zoom: 1`, `zoom: 1.0 !important` and `zoom: 1.5`: the first two
+appear as safe deletions with the whole declaration removed, while `1.5` stays a manual finding.
+
+Suite: 285 tests.

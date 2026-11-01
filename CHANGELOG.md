@@ -51,6 +51,8 @@ All notable changes to WebLift are recorded here. The format follows
 - Inline `style=""` attributes are parsed declaration by declaration with file offsets, so
   `filter`, `zoom`, `-ms-` properties and `behavior` are detected there too. Their findings stay
   MANUAL because the stylesheet recipes do not edit HTML attribute ranges.
+- `zoom: 1` hasLayout trigger removal (`RCP-DROP-ZOOM-ONE`): literal `1`/`1.0` declarations are
+  deleted; fractional, percentage or larger values stay manual.
 - Inline handler attributes that read `window.event` (`WL-JS-018` / `RCP-INLINE-HANDLER-EVENT`):
   the attribute already receives `event`, so every reference is replaced in place, and after a
   rescan the `srcElement`/`returnValue`/`cancelBubble` recipes apply to the inline event.
@@ -59,10 +61,10 @@ All notable changes to WebLift are recorded here. The format follows
 
 ### Changed
 
-- The rule and recipe catalog is now 62 rules and 17 recipes; the fixture is 12 files,
-  96 findings, 41 high risk, 32 auto-convertible (10 SAFE, 22 CONDITIONAL), 54 manual and 10
+- The rule and recipe catalog is now 62 rules and 18 recipes; the fixture is 12 files,
+  96 findings, 41 high risk, 35 auto-convertible (13 SAFE, 22 CONDITIONAL), 51 manual and 10
   unsupported.
-- The automated suite is now 283 tests, including mutation-checked guards for the new handler,
+- The automated suite is now 285 tests, including mutation-checked guards for the new handler,
   inline-attribute, CSS and locking paths.
 
 ### Fixed

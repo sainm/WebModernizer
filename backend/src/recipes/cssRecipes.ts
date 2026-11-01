@@ -239,8 +239,49 @@ const ieFilter: Recipe = {
   },
 };
 
+const dropZoomOne: Recipe = {
+  id: 'RCP-DROP-ZOOM-ONE',
+  name: 'Drop zoom: 1 hasLayout trigger',
+  version: '1.0.0',
+  ruleIds: ['WL-CSS-006'],
+  level: 'SAFE',
+  summary: 'Deletes a zoom declaration whose value is exactly 1 or 1.0, which has no effect in Chrome.',
+  caveats: [
+    'Only a literal 1/1.0 is removed; fractional or larger values may really scale and stay manual.',
+    'Deleting zoom: 1 cannot change Chrome rendering; it only removes a declaration kept for old IE hasLayout.',
+    'Declarations inside inline style attributes are not edited.',
+  ],
+  preconditions(finding: AnalysisFinding, ctx: RecipeContext): PreconditionResult {
+    const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) {
+      return { ok: false, reasons: ['The declaration is no longer at this position, or it comes from an inline style attribute.'] };
+    }
+    if (hit.decl.prop.toLowerCase() !== 'zoom') {
+      return { ok: false, reasons: ['The declaration is no longer the zoom property.'] };
+    }
+    if (!/^1(?:\.0+)?$/.test(hit.decl.value.trim())) {
+      return { ok: false, reasons: ['The value is not the literal 1, so removing it could change scaling.'] };
+    }
+    return { ok: true, reasons: [] };
+  },
+  plan(finding: AnalysisFinding, ctx: RecipeContext): TextEdit[] | null {
+    const hit = findDeclaration(ctx.parsed, finding.startOffset, finding.endOffset);
+    if (!hit) return null;
+    const range = deleteDeclaration(ctx.text, hit.decl.startOffset, hit.decl.endOffset);
+    return [
+      {
+        start: range.start,
+        end: range.end,
+        newText: '',
+        ruleId: 'WL-CSS-006',
+        reason: 'zoom: 1 is a no-op in Chrome; it existed for IE hasLayout.',
+      },
+    ];
+  },
+};
+
 function lineStartOf(text: string, offset: number): number {
   return text.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
 }
 
-export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard, ieFilter];
+export const cssRecipes: Recipe[] = [dropIeHack, renameToStandard, ieFilter, dropZoomOne];

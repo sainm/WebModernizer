@@ -1,7 +1,7 @@
 # Rule catalog
 
 Generated from the rule registry. The ruleDoc test fails if this file drifts from the source registry.
-Total: **62 rules**, **17 recipes**.
+Total: **62 rules**, **18 recipes**.
 
 ## Distribution by category
 
@@ -84,7 +84,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | WL-CSS-003 | IE filter (progid / alpha) | css | CSS_COMPAT | MEDIUM | MANUAL | RCP-IE-FILTER | ie-only, filter |
 | WL-CSS-004 | Vendor -ms- prefixed property | css | CSS_COMPAT | MEDIUM | CONDITIONAL | RCP-RENAME-MS-PROP | vendor-prefix |
 | WL-CSS-005 | IE CSS hack syntax | css | CSS_COMPAT | MEDIUM | SAFE | RCP-DROP-CSS-HACK | css-hack |
-| WL-CSS-006 | zoom property | css | CSS_COMPAT | LOW | MANUAL | — | layout |
+| WL-CSS-006 | zoom property | css | CSS_COMPAT | LOW | MANUAL | RCP-DROP-ZOOM-ONE | layout |
 | WL-JSP-001 | Dynamic JSP region inside analyzed block | jsp | DYNAMIC_CODE | MEDIUM | MANUAL | — | jsp, dynamic |
 | WL-JSP-002 | Asset URL built by server-side code | jsp | DYNAMIC_CODE | MEDIUM | MANUAL | — | jsp, dynamic-reference |
 | WL-DYN-001 | Script URL assembled at runtime | javascript | DYNAMIC_CODE | MEDIUM | MANUAL | — | dynamic-reference |
@@ -112,6 +112,7 @@ A rule may only report SAFE or CONDITIONAL when a recipe is registered for it. T
 | RCP-DROP-CSS-HACK | Drop IE CSS hack declaration | SAFE | WL-CSS-005 | Deletes the star/underscore declaration or the \9 value hack. |
 | RCP-RENAME-MS-PROP | Rename -ms- property to the standard one | CONDITIONAL | WL-CSS-004 | Renames the prefixed property in place; the value and formatting stay untouched. |
 | RCP-IE-FILTER | IE filter -> opacity or linear-gradient | CONDITIONAL | WL-CSS-003 | Replaces an alpha-only filter with opacity, or a simple two-color gradient filter with background-image: linear-gradient(...). |
+| RCP-DROP-ZOOM-ONE | Drop zoom: 1 hasLayout trigger | SAFE | WL-CSS-006 | Deletes a zoom declaration whose value is exactly 1 or 1.0, which has no effect in Chrome. |
 
 ## Evidence discipline
 

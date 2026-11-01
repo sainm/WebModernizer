@@ -400,13 +400,14 @@ define({
   meta: {
     id: 'WL-CSS-006',
     name: 'zoom property',
-    version: '1.1.0',
+    version: '1.2.0',
     description: 'The non-standard zoom property is widely used in IE-era layouts for hasLayout fixes.',
     language: 'css',
     category: 'CSS_COMPAT',
     defaultSeverity: 'LOW',
     defaultMigrationLevel: 'MANUAL',
-    basis: 'A declaration whose property is zoom.',
+    basis: 'A declaration whose property is zoom. A literal value of 1 or 1.0 is a no-op in Chrome and is automatable.',
+    recipeId: 'RCP-DROP-ZOOM-ONE',
     tags: ['layout'],
   },
   detect(ctx) {
@@ -416,6 +417,7 @@ define({
       if (prop !== 'zoom') return;
       // A star-prefixed zoom is already reported as a hack; avoid double reporting.
       if (/(?:^|;)\s*[*_][a-z-]+\s*:/i.test(hit.declaration.raw)) return;
+      const noOp = /^1(?:\.0+)?$/.test(hit.declaration.value.trim());
       out.push(
         makeFinding(asRule(this), ctx, {
           startOffset: hit.offset,
@@ -423,8 +425,10 @@ define({
           message: 'Uses non-standard zoom property',
           risk:
             'Chrome implements zoom, so this usually still works — but it is non-standard, scales layout in ways that interact badly with transforms, and in IE-era code it was often a hasLayout trigger rather than an actual zoom.',
-          recommendation:
-            'Check whether the value is 1: if so, the declaration exists only for hasLayout and can be deleted. If it really scales, keep it or switch to transform: scale() with an explicit transform-origin.',
+          recommendation: noOp
+            ? 'Migrate this finding to delete the declaration: zoom: 1 is a no-op in Chrome and existed only for hasLayout. Higher or fractional values may really scale and stay manual.'
+            : 'Check whether the value is 1: if so, the declaration exists only for hasLayout and can be deleted. If it really scales, keep it or switch to transform: scale() with an explicit transform-origin.',
+          migrationLevel: noOp ? 'SAFE' : 'MANUAL',
           confidence: 'POSSIBLE',
           evidence: {
             kind: 'CssDeclaration',
@@ -433,6 +437,7 @@ define({
             detail: {
               value: hit.declaration.value,
               selector: hit.declaration.selector ?? '(none)',
+              ...(noOp ? { zoomValue: hit.declaration.value.trim() } : {}),
             },
           },
         }),

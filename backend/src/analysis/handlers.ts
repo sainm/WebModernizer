@@ -313,6 +313,59 @@ function helperSynchronousUses(fn: JsNode, helper: JsNode): { ok: boolean; calls
   return { ok, calls };
 }
 
+interface HandlerHelper {
+  node: JsNode;
+  kind: 'declaration' | 'variable' | 'iife';
+  name: string;
+  declarationId: JsNode | null;
+}
+
+function classifyHandlerHelper(
+  fn: JsNode,
+  nearest: JsNode,
+  outer: JsNode | null,
+  parent: JsNode | null,
+): HandlerHelper | null {
+  if (outer !== fn) return null;
+  if (nearest.type === 'FunctionDeclaration') {
+    const id = nearest.id as JsNode | undefined;
+    if (!id || id.type !== 'Identifier') return null;
+    return { node: nearest, kind: 'declaration', name: String(id.name), declarationId: id };
+  }
+  if (nearest.type !== 'FunctionExpression' && nearest.type !== 'ArrowFunctionExpression') return null;
+  if (parent?.type === 'VariableDeclarator') {
+    const id = parent.id as JsNode | undefined;
+    if (!id || id.type !== 'Identifier') return null;
+    return { node: nearest, kind: 'variable', name: String(id.name), declarationId: id };
+  }
+  if (parent?.type === 'CallExpression' && parent.callee === nearest) {
+    return { node: nearest, kind: 'iife', name: '(iife)', declarationId: null };
+  }
+  return null;
+}
+
+function variableSynchronousUses(
+  fn: JsNode,
+  name: string,
+  declarationId: JsNode,
+): { ok: boolean; calls: number } {
+  let ok = true;
+  let calls = 0;
+  walkJs(fn, (node, parent, ancestors) => {
+    if (node.type !== 'Identifier' || node.name !== name || node === declarationId) return;
+    if (!(parent?.type === 'CallExpression' && parent.callee === node)) {
+      ok = false;
+      return;
+    }
+    if (nearestFunction(ancestors) !== fn) {
+      ok = false;
+      return;
+    }
+    calls += 1;
+  });
+  return { ok, calls };
+}
+
 function inspectHandlerBody(
   fn: JsNode,
   reuseParam: string | null = null,
@@ -323,7 +376,7 @@ function inspectHandlerBody(
   eventBinding: boolean;
 } {
   const refs: JsNode[] = [];
-  const helperRefs = new Map<JsNode, JsNode[]>();
+  const helpers = new Map<JsNode, { helper: HandlerHelper; refs: JsNode[] }>();
   let nestedRef = false;
   let hasArguments = false;
   walkJs(fn, (node, _parent, ancestors) => {
@@ -333,20 +386,31 @@ function inspectHandlerBody(
     const ownScope = node === fn || nearest === fn;
     if (node.type === 'MemberExpression' && memberPath(node) === 'window.event') {
       if (ownScope) refs.push(node);
-      else if (nearest && nearest.type === 'FunctionDeclaration' && outer === fn) {
-        const list = helperRefs.get(nearest) ?? [];
-        list.push(node);
-        helperRefs.set(nearest, list);
-      } else nestedRef = true;
+      else {
+        const nearestIndex = nearest ? ancestors.lastIndexOf(nearest) : -1;
+        const parentOfNearest = nearestIndex > 0 ? ancestors[nearestIndex - 1] : null;
+        const helper = nearest ? classifyHandlerHelper(fn, nearest, outer, parentOfNearest) : null;
+        if (!helper) nestedRef = true;
+        else {
+          const entry = helpers.get(nearest) ?? { helper, refs: [] };
+          entry.refs.push(node);
+          helpers.set(nearest, entry);
+        }
+      }
     }
     if (ownScope && node.type === 'Identifier' && node.name === 'arguments') hasArguments = true;
   });
-  for (const [helper, list] of helperRefs) {
-    const uses = helperSynchronousUses(fn, helper);
+  for (const { helper, refs: list } of helpers.values()) {
+    const uses =
+      helper.kind === 'declaration'
+        ? helperSynchronousUses(fn, helper.node)
+        : helper.kind === 'variable' && helper.declarationId
+          ? variableSynchronousUses(fn, helper.name, helper.declarationId)
+          : { ok: true, calls: 1 };
     if (
-      helper.async === true ||
-      helper.generator === true ||
-      (reuseParam ? scopeBindsName(helper, reuseParam) : scopeReadsEventIdentifier(helper)) ||
+      helper.node.async === true ||
+      helper.node.generator === true ||
+      (reuseParam ? scopeBindsName(helper.node, reuseParam) : scopeReadsEventIdentifier(helper.node)) ||
       !uses.ok ||
       uses.calls === 0
     ) {

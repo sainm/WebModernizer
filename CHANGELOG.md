@@ -30,9 +30,9 @@ All notable changes to WebLift are recorded here. The format follows
 - Handler sources now include by-reference registrations in another scanned file, inline `on*`
   calls in the same file, cross-file inline calls linked as companion findings in one multi-file
   plan, and handlers with existing parameters whose call sites are all inline `on*` calls.
-- Handler migration now rewrites `window.event` inside a nested helper when the handler calls it
-  synchronously from its own body; returned, passed, timer-invoked, async or deeper-nested helpers
-  still block the finding.
+- Handler migration now rewrites `window.event` inside a synchronously invoked nested declaration,
+  variable-assigned function or arrow, or IIFE; returned, reassigned, passed, timer-invoked, async
+  or deeper-nested helpers still block the finding.
 - `addEventListener` and `on*` property handlers with an existing first parameter reuse it instead
   of being rejected. `attachEvent` handlers with parameters, mixed registrations and handlers that
   are also called inline stay manual.
@@ -64,7 +64,7 @@ All notable changes to WebLift are recorded here. The format follows
 - The rule and recipe catalog is now 62 rules and 18 recipes; the fixture is 12 files,
   96 findings, 41 high risk, 35 auto-convertible (13 SAFE, 22 CONDITIONAL), 51 manual and 10
   unsupported.
-- The automated suite is now 285 tests, including mutation-checked guards for the new handler,
+- The automated suite is now 289 tests, including mutation-checked guards for the new handler,
   inline-attribute, CSS and locking paths.
 
 ### Fixed

@@ -119,15 +119,18 @@ all of these hold across the scanned files: a registration by reference through 
 `detachEvent`, `addEventListener`, `removeEventListener` or an `on*` property; the function name has
 no other use anywhere in the scanned files (a direct call, timer or callback blocks it); no
 `arguments` use; no local `event` binding or parameter named `event`; and not
-`beforeunload`/`unload`. A nested helper may read `window.event` only when it is declared in the
-handler, called directly from the handler body, not async or a generator, and does not bind the
-event parameter name; a returned, passed, timer-invoked or deeper-nested helper blocks the finding.
-A handler with existing parameters is offered in two cases: every call site is an inline `on*` call
+`beforeunload`/`unload`. A nested function may read `window.event` only when it is invoked
+synchronously while the handler runs: a function declaration or variable-assigned function called
+directly from the handler body, or an immediately invoked function expression. It must not be async
+or a generator, must not bind the event parameter name, and must not escape: a returned, reassigned,
+passed, timer-invoked or deeper-nested helper blocks the finding. A handler with existing
+parameters is offered in two cases: every call site is an inline `on*` call
 (so `event` is inserted first everywhere), or every registration passes the event first
 (`addEventListener` or an `on*` property) and the first parameter is reused without a signature
 change. An `attachEvent` handler with parameters is still manual because that registration does not
 pass the event. The recipe injects `event` first or reuses the existing parameter and replaces the
-handler's `window.event` references, including those in a synchronously called helper. For a cross-file registration the finding is emitted in the definition file (a `.js`
+handler's `window.event` references, including those in a synchronously invoked declaration,
+variable function or IIFE. For a cross-file registration the finding is emitted in the definition file (a `.js`
 file), the registration file is not edited, and preview verifies that the registration file still
 has the hash it had at scan time; if it changed, the finding is blocked until a rescan. Inline
 `on*="fn(...)"` calls in the same or another file are a source; existing arguments are kept and

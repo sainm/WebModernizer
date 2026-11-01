@@ -469,14 +469,14 @@ function findHandlerForFinding(
 const handlerEventParamRecipe: Recipe = {
   id: 'RCP-HANDLER-EVENT-PARAM',
   name: 'window.event handler -> event parameter',
-  version: '1.6.0',
+  version: '1.7.0',
   ruleIds: ['WL-JS-017'],
   level: 'CONDITIONAL',
-  summary: 'Adds an event parameter to a handler, or reuses the first parameter of an addEventListener/on* handler, replaces window.event (including in a synchronously called nested helper), and passes event first from inline on* calls while keeping existing parameters and arguments in order.',
+  summary: 'Adds an event parameter to a handler, or reuses the first parameter of an addEventListener/on* handler, replaces window.event (including in a synchronously called nested declaration, variable function or IIFE), and passes event first from inline on* calls while keeping existing parameters and arguments in order.',
   caveats: [
     'Inline on* calls are updated to pass event first; existing arguments keep their order. A non-inline call to the same function blocks the finding.',
     'A handler with parameters is offered when every call site is an inline on* call (event is inserted first), or when it is registered with addEventListener/an on* property and its first parameter can be reused. attachEvent handlers with parameters stay manual because that registration does not pass the event.',
-    'A nested helper is rewritten only when it is declared in the handler, called directly from the handler body, and does not bind the event parameter name; returned, passed, timer-invoked, async or deeper-nested helpers block the finding.',
+    'A nested declaration, variable function or IIFE is rewritten only when it is invoked directly in the handler body (or is an IIFE) and does not bind the event parameter name; escaped, reassigned, passed, timer-invoked, async or deeper-nested helpers block the finding.',
     'For a cross-file registration, the registration file must stay unchanged and must not call the function directly; the preview verifies its hash.',
     'The attachEvent/addEventListener registration still needs its own migration.',
     'Property recipes (srcElement, returnValue, cancelBubble) become applicable only after a rescan.',

@@ -1914,3 +1914,37 @@ red. The fixture moves from 32 to 35 auto-convertible (SAFE 10 -> 13, CONDITIONA
 appear as safe deletions with the whole declaration removed, while `1.5` stays a manual finding.
 
 Suite: 285 tests.
+
+## 49. Forty-fifth increment — variable helpers and IIFEs are provably synchronous too
+
+Nested helper support only recognized a `FunctionDeclaration` called by name from the handler body.
+Legacy handlers also define helpers as `var mark = function () {...}` or arrow constants, and use
+immediately invoked function expressions; both run synchronously during dispatch, so the injected
+event parameter is in scope.
+
+**Helper classification is now shape-aware.** `classifyHandlerHelper` accepts three direct-child
+shapes: a named function declaration, a function expression or arrow assigned to a variable
+declarator, and a function expression/arrow that is the callee of a call expression (IIFE). The
+variable form requires every use of the variable in the handler to be a direct call in the handler
+body; reassignment, returning or passing the variable, timer callbacks and `.call` all block it. The
+IIFE form needs no call-site check because the call is the definition. Async/generator helpers and
+helpers that bind the event parameter name remain excluded, in both inject and reuse modes.
+
+**One level stays one level.** A helper nested inside another helper (including an IIFE inside a
+timer callback) still sets `nestedRef`; only functions whose immediate enclosing function is the
+handler are classified. This keeps the proof simple: every accepted call executes while the
+handler is on the stack, so replacing `window.event` with the event parameter is a closure capture,
+not a timing change.
+
+**Tests and mutations.** Four cases: variable function, arrow constant, function IIFE and arrow
+IIFE; a full migration of a variable helper through a rescan to `stopPropagation`/`preventDefault`;
+nine negatives (escape, timer, call inside timer, reassignment, async, event shadow, `.call`, IIFE
+inside timer, async IIFE); and a reuse-mode variable helper that shadows the parameter. Disabling
+variable classification, IIFE classification, or the variable-use check each turned a test red. The
+fixture is unchanged at 12 files / 96 findings / 35 auto-convertible; rule and recipe are 1.7.0 and
+the suite is 289 tests.
+
+**UI.** A demo handler with a variable helper and an IIFE reports both references in one finding;
+the preview injects `event` at the signature and rewrites both bodies, leaving the calls untouched.
+
+Suite: 289 tests.

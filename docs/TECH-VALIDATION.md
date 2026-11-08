@@ -2015,7 +2015,9 @@ and the web `tsc --noEmit && vite build` both succeed. A one-shot smoke run star
 server on an ephemeral port with a temporary data directory and fetches
 `{"ok":true,"version":"0.2.0","rules":62,"recipes":18}` from `/api/health`, with `/api/meta`
 also reporting `0.2.0`; the server is closed in the same process. A rendered-page screenshot is not
-part of this increment: nothing in the UI changed, so the HTTP response is the data that matters.
+part of this increment: the only UI change is the sidebar's fallback string when `/api/meta` is
+unavailable, and the `tsc --noEmit` half of the web build type-checks it. The HTTP response is the
+data that matters here.
 
 `docs/LIMITATIONS.md` had also drifted: the transaction section still claimed "There is no lock"
 while the access section documented the cross-process FIFO project lock. It now says the lock

@@ -1,6 +1,6 @@
 {
   "name": "weblift",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "WebLift - IE to Chrome migration toolkit: rule-based static analysis, precise source location, and safe rule-driven transformation.",
   "workspaces": [

@@ -179,8 +179,10 @@ it touches is prepared (hash check, backup, in-memory edit, re-parse) before any
 and a failed write compensates the files already written. What it does not cover:
 
 - Two separate execute() calls are two transactions; there is no way to group them later.
-- There is no lock. Two people running migrations on the same checkout are protected only by the
-  per-file hash check, which fails the second transaction rather than merging it.
+- The project lock serializes whole operations, not transactions across calls: a second
+  `execute()` waits its turn (or times out), but it is still a separate session with its own
+  backups. Two people reviewing the same checkout are additionally protected by the per-file hash
+  check, which fails the second transaction rather than merging edits.
 - A rollback restores every file in the session or none of them; there is no per-file undo inside
   a multi-file transaction (per-file rollback exists at the batch level via the API).
 

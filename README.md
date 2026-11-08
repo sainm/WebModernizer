@@ -62,7 +62,7 @@ page *becomes* the baseline instead of pretending to be a pass.
 ### Tests
 
 ```bash
-npm test        # 289 tests: parser, rules, per-rule coverage, rule metadata, message contract,
+npm test        # 294 tests (46 files): parser, rules, per-rule coverage, rule metadata, message contract,
                 #            decoding, encoding write-back, diff, recipes, batching, storage upgrade,
                 #            visual diff, ignore rules, incremental reuse, crash recovery,
                 #            manual fix verification, removed-API detection, doc drift,
@@ -74,7 +74,8 @@ npm test        # 289 tests: parser, rules, per-rule coverage, rule metadata, me
                 #            variable/IIFE handler helpers, reusing an existing event parameter,
                 #            event.button numbering, srcUrn / recordset / setExpression detection,
                 #            filter opacity, gradient filter conversion,
-                #            inline style declarations, zoom: 1 removal
+                #            inline style declarations, zoom: 1 removal,
+                #            HTTP layer, plan binding, transaction claims, trend, release bookkeeping
 ```
 
 The suite includes the case the specification calls out explicitly: text that only *looks*
@@ -264,7 +265,7 @@ detected and that findings inside it land on the correct line.
 | 12 | Record migration and validation history | `migration_execution`, `finding_status_history`, `validation_run` |
 | 13 | Export results | `?format=json\|csv\|html` |
 | 14 | History survives a page refresh | SQLite-backed API |
-| 15 | Automated tests for core behaviour | 289 tests |
+| 15 | Automated tests for core behaviour | 294 tests in 46 files |
 | 16 | Documented build/start commands | this file |
 | 17 | Works without AI | no model call anywhere in the pipeline |
 | 18 | No fabricated statistics | every number is aggregated from stored rows |

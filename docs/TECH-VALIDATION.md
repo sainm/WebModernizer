@@ -1979,3 +1979,44 @@ encoder, which is the case the "no encoder" guard actually exists for. The old f
 reach it.
 
 Suite: 290 tests.
+
+---
+
+## 51. Forty-seventh increment — shipping 0.2.0 without version drift
+
+Before this pass the three workspace manifests and the lockfile said `0.1.0`, `/api/health` and
+`/api/meta` each carried their own `'0.1.0'` literal, and every changelog entry sat under
+`[Unreleased]`. Nothing in the suite connected those four facts, so a bump that updated only some
+of them would have shipped silently.
+
+**One source of truth.** `npm version 0.2.0 --no-git-tag-version --workspaces
+--include-workspace-root` updates root, backend, web and `package-lock.json` together. The server
+now derives `VERSION` once from `resolve(__dirname, '../../package.json')`, which resolves to
+`backend/package.json` from both `src/server/index.ts` and `dist/server/index.js` — the built
+artefact was checked separately, not assumed.
+
+**Bookkeeping as tests.** `release.test.ts` asserts workspace version parity, a dated heading for
+the version being shipped, `[Unreleased]` above the newest release, and a non-empty bullet list in
+the released section. `apiHttp.test.ts` asserts `/api/health.version` equals the manifest version
+over a real HTTP request. `CHANGELOG.md` was split into an empty `[Unreleased]` and a dated
+`[0.2.0]` section; the review increments that were missing from it (loopback binding, plan hashing,
+write-ahead claims, serialization, trend/burn-down, HTTP tests, interrupted-scan progress) were
+added, and the recorded test count was corrected from 289 to 294. The README's two test-count
+mentions were updated with it. The sidebar still carried a hardcoded `v0.1.0` fallback for when
+`/api/meta` is unavailable — a fourth copy of the number — and now shows `—` instead.
+
+**Mutation checks, all red as intended:** drift only `web/package.json` to `0.2.1` → version-parity
+test fails; delete the dated changelog heading → release assertions fail; restore a hardcoded
+`'0.1.0'` in the server → HTTP version assertion fails. All three files were restored byte-for-byte
+afterwards.
+
+**Final verification.** `npm test`: 46 files / 294 tests, all green. `npm run build`: backend `tsc`
+and the web `tsc --noEmit && vite build` both succeed. A one-shot smoke run starts the *built*
+server on an ephemeral port with a temporary data directory and fetches
+`{"ok":true,"version":"0.2.0","rules":62,"recipes":18}` from `/api/health`, with `/api/meta`
+also reporting `0.2.0`; the server is closed in the same process. A rendered-page screenshot is not
+part of this increment: nothing in the UI changed, so the HTTP response is the data that matters.
+
+`docs/LIMITATIONS.md` had also drifted: the transaction section still claimed "There is no lock"
+while the access section documented the cross-process FIFO project lock. It now says the lock
+serializes whole operations but does not merge two separate `execute()` sessions.

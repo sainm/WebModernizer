@@ -5,6 +5,10 @@ All notable changes to WebLift are recorded here. The format follows
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.2.0] - 2026-11-08
+
 ### Added
 
 - Encoding-faithful write-back for Shift_JIS, EUC-JP, ISO-2022-JP, UTF-16LE/BE and UTF-8 BOM
@@ -58,14 +62,29 @@ All notable changes to WebLift are recorded here. The format follows
   rescan the `srcElement`/`returnValue`/`cancelBubble` recipes apply to the inline event.
 - The migration page auto-selects every item of a companion plan, so the reviewed plan hash covers
   the whole group.
+- A reviewed migration plan is bound to its execution by `planHash`: the client echoes the plan's
+  digest and the server recomputes it, refusing to write anything when the plan changed.
+- Write-ahead transaction claims: `migration_execution` rows are recorded as `PENDING` before the
+  first byte is written, so a crash can be rolled back or cleared based on the file's own hash.
+  The report counts only `APPLIED` rows as applied.
+- Migrations and rollbacks are serialized per project in-process, and rollback is refused while a
+  migration is running; a timeout or a refused plan writes nothing.
+- "Since previous scan" counts resolved and newly introduced findings on every completed scan,
+  shown on the scan detail and overview pages, plus a burn-down chart on the project page.
+- A real HTTP-layer test suite covering health/meta, findings, encoded source viewing, path
+  traversal, CORS, SSE lifecycle, trend and plan binding.
+- `/api/health` and `/api/meta` report the version from `backend/package.json`; release bookkeeping
+  tests guard workspace version parity, a dated changelog section and a non-empty entry.
 
 ### Changed
 
 - The rule and recipe catalog is now 62 rules and 18 recipes; the fixture is 12 files,
   96 findings, 41 high risk, 35 auto-convertible (13 SAFE, 22 CONDITIONAL), 51 manual and 10
   unsupported.
-- The automated suite is now 289 tests, including mutation-checked guards for the new handler,
-  inline-attribute, CSS and locking paths.
+- The API binds `127.0.0.1` by default, grants CORS to loopback origins only and refuses writes
+  from any other `Origin`; `WEBLIFT_HOST` is an explicit opt-in to wider exposure.
+- The automated suite is now 294 tests in 46 files, including mutation-checked guards for the new
+  handler, inline-attribute, CSS, locking, plan-binding and release paths.
 
 ### Fixed
 
@@ -73,5 +92,10 @@ All notable changes to WebLift are recorded here. The format follows
   setting, instead of reporting `COMPLETED_WITH_WARNINGS` while marking every file "cannot read".
 - A scan interrupted by SIGKILL no longer leaves the project locked or the persisted findings
   inconsistent.
+- An interrupted scan reports the discovered file total and the phase it stopped in, instead of
+  "48 / 48, 100 %" with an all-green phase list; SSE streams for terminal scans close after `done`.
+- A fully incremental scan reports its real scanned/parsed counts instead of `0 / 11`.
+- Source viewing decodes files with the encoding recorded at scan time, so Shift_JIS sources are
+  readable; atomic writes preserve file permissions and re-emit the original BOM bytes.
 - Rule documentation drift is caught by a test that compares `docs/RULES.md` with the source
   registry, so a stale generation step fails the suite instead of shipping.

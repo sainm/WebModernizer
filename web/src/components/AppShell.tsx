@@ -65,7 +65,7 @@ export function AppShell({ children, version }: { children: React.ReactNode; ver
             ))}
           </div>
           <div className="muted" style={{ fontSize: 11 }}>
-            v{version ?? '0.1.0'} · local only
+            {version ? `v${version}` : '—'} · local only
           </div>
         </div>
       </aside>

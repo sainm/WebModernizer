@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,9 +67,12 @@ afterAll(async () => {
 
 describe('api surface', () => {
   it('reports health and rule metadata', async () => {
-    const health = await json<{ ok: boolean; rules: number }>(await fetch(`${base}/api/health`));
+    const health = await json<{ ok: boolean; rules: number; version: string }>(await fetch(`${base}/api/health`));
     expect(health.ok).toBe(true);
     expect(health.rules).toBeGreaterThan(40);
+    // The API reports the manifest version; it used to carry its own literal in two places.
+    const manifest = JSON.parse(readFileSync(join(here, '../../backend/package.json'), 'utf8')) as { version: string };
+    expect(health.version).toBe(manifest.version);
 
     const meta = await json<{ ruleSignature: string }>(await fetch(`${base}/api/meta`));
     expect(meta.ruleSignature).toMatch(/@/);

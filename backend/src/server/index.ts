@@ -20,6 +20,20 @@ import { Store } from '../storage/store.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * The version the API reports. Read from the workspace manifest instead of a literal: this file
+ * used to hardcode it in two places, which is one more thing to forget when cutting a release.
+ * The path resolves the same way from `src/server` and from `dist/server`.
+ */
+const VERSION = ((): string => {
+  try {
+    const manifest = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8')) as { version?: string };
+    return manifest.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+/**
  * Adds the automation view to a finding without storing it: whether a recipe exists,
  * whether one is planned, and whether a shipped recipe is blocked for this occurrence.
  */
@@ -142,12 +156,12 @@ export function createServer(store: Store): ServerContext {
   /* ------------------------------- meta ------------------------------- */
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, version: '0.1.0', rules: RULES.length, recipes: RECIPES.length });
+    res.json({ ok: true, version: VERSION, rules: RULES.length, recipes: RECIPES.length });
   });
 
   app.get('/api/meta', (_req, res) => {
     res.json({
-      version: '0.1.0',
+      version: VERSION,
       ruleStats: ruleStats(),
       categories: ['JS_API', 'DOM_API', 'HTML_COMPAT', 'CSS_COMPAT', 'ACTIVEX_VBSCRIPT', 'BROWSER_BEHAVIOR', 'DYNAMIC_CODE'],
       severities: ['HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'],
